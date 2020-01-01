@@ -19,7 +19,7 @@
 module rs-benchmark
 
 require (
-	cloud.google.com/go v0.37.4
+	cloud.google.com/go v0.50.0
 	code.cloudfoundry.org/bytefmt v0.0.0-20180906201452-2aa6f33b730c
 	github.com/Azure/azure-storage-blob-go v0.6.0
 	github.com/DataDog/zstd v1.4.0 // indirect
