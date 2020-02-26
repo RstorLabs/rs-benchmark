@@ -21,7 +21,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha1"
@@ -128,13 +127,11 @@ func (u *S3AwsV2) DoDownload(ctx context.Context, id int) (result TransferResult
 }
 
 func (u *S3AwsV2) DoUpload(ctx context.Context, id int, data io.ReadSeeker) (result TransferResult) {
-	fileobj := bytes.NewReader(object_data)
-
 	key := fmt.Sprintf("%s-%d", objPrefix, id)
 	path := fmt.Sprintf("%s/%s/%s", u.Host, u.Bucket, key)
 
 	result.Id = id
-	req, _ := http.NewRequest("PUT", path, fileobj)
+	req, _ := http.NewRequest("PUT", path, data)
 	req = req.WithContext(ctx)
 	req.Header.Set("Content-Length", strconv.FormatUint(object_size, 10))
 
@@ -163,7 +160,6 @@ func (u *S3AwsV2) DoUpload(ctx context.Context, id int, data io.ReadSeeker) (res
 	return result
 }
 
-
 func parseAmzHeaders(req *http.Request) string {
 	var headers []string
 	for header := range req.Header {
@@ -172,7 +168,7 @@ func parseAmzHeaders(req *http.Request) string {
 			headers = append(headers, norm)
 		}
 	}
-	
+
 	sort.Strings(headers)
 	for n, header := range headers {
 		headers[n] = header + ":" + strings.Replace(req.Header.Get(header), "\n", " ", -1)

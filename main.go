@@ -22,11 +22,9 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"flag"
 	"fmt"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -112,9 +110,9 @@ func main() {
 		os.Exit(0)
 	}
 
-	fmt.Printf("rs-benchmark v%s - a compact tool for benchmarking different object storages\n",version)
+	fmt.Printf("rs-benchmark v%s - a compact tool for benchmarking different object storages\n", version)
 	fmt.Println("Copyright (C) 2016-2019 RStor Inc (open-source@rstor.io)")
-	fmt.Println("Released under GPL v3 license\n")
+	fmt.Println("Released under GPL v3 license")
 
 	if help == true {
 		fmt.Println("Available arguments:")
@@ -126,7 +124,7 @@ func main() {
 	if protocol == "" {
 		fmt.Println("Missing argument -protocol for client protocol.")
 		printHelp()
-		
+
 	}
 
 	if protocol == "s3v4" && region == "" {
@@ -190,12 +188,12 @@ func main() {
 	var err error
 
 	if object_size, err = bytefmt.ToBytes(sizeArg); err != nil {
-		fmt.Println("Invalid -z argument for object size: %v", err)
+		fmt.Printf("Invalid -z argument for object size: %v\n", err)
 		printHelp()
 	}
 
 	if part_size, err = bytefmt.ToBytes(multipartSizeArg); err != nil {
-		fmt.Println("Invalid -multipart-size argument for part size: %v", err)
+		fmt.Printf("Invalid -multipart-size argument for part size: %v\n", err)
 		printHelp()
 	}
 
@@ -267,12 +265,6 @@ func main() {
 		fmt.Println("For more information, run again with flag -v.")
 	}
 
-	// Initialize data for the bucket
-	object_data = make([]byte, object_size)
-	rand.Read(object_data)
-	// hasher := md5.New()
-	// hasher.Write(object_data)
-
 	// Loop running the tests
 	for loop := 1; loop <= loops; loop++ {
 		runLoop(loop, pauseBetweenPhases)
@@ -283,7 +275,7 @@ func main() {
 
 func runLoop(loop int, pauseBetweenPhases bool) {
 	if loop > 1 && pauseBetweenPhases {
-		fmt.Println("Loop %d done", loop-1)
+		fmt.Printf("Loop %d done\n", loop-1)
 		pause()
 	}
 
@@ -429,10 +421,10 @@ type TransferResult struct {
 
 func runUpload(ctx context.Context, ids chan int, res chan TransferResult) {
 	for id := range ids {
-		reader := bytes.NewReader(object_data)
+		reader := InfiniteReader{Size: int64(object_size)}
 
 		startTime := time.Now()
-		r := client.DoUpload(ctx, id, reader)
+		r := client.DoUpload(ctx, id, &reader)
 
 		r.Duration = time.Now().Sub(startTime)
 		r.Id = id

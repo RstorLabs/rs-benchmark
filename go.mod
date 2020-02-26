@@ -45,6 +45,7 @@ require (
 	github.com/prometheus/procfs v0.0.0-20190416084830-8368d24ba045 // indirect
 	github.com/sirupsen/logrus v1.4.1
 	github.com/stretchr/objx v0.2.0 // indirect
+	github.com/stretchr/testify v1.3.0
 	go.opencensus.io v0.20.2 // indirect
 	golang.org/x/arch v0.0.0-20190312162104-788fe5ffcd8c
 	golang.org/x/crypto v0.0.0-20190418165655-df01cb2cc480
@@ -66,3 +67,5 @@ require (
 	gopkg.in/yaml.v2 v2.2.2 // indirect
 	honnef.co/go/tools v0.0.0-20190418001031-e561f6794a2a // indirect
 )
+
+go 1.13
