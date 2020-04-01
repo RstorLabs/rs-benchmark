@@ -24,7 +24,7 @@ require (
 	github.com/Azure/azure-storage-blob-go v0.6.0
 	github.com/DataDog/zstd v1.4.0 // indirect
 	github.com/Shopify/sarama v1.22.0 // indirect
-	github.com/aws/aws-sdk-go v1.18.0
+	github.com/aws/aws-sdk-go v1.30.1
 	github.com/beorn7/perks v1.0.0 // indirect
 	github.com/go-logfmt/logfmt v0.4.0 // indirect
 	github.com/gogo/protobuf v1.2.1 // indirect
