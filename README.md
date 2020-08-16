@@ -109,7 +109,7 @@ Below are the available command line options to the program:
   -t int
     	Number of parallel requests to run (default 1)
   -u string
-    	URL for endpoint with method prefix (e.g. https://s3.YOUR_CUSTOMER_NAME.rstorlabs.io)
+    	URL for endpoint with method prefix (e.g. https://s3.YOUR_CUSTOMER_NAME.rstorcloud.io)
   -v	Verbose error output
   -version
         Show version
@@ -129,7 +129,7 @@ Suppose we want to benchmark the RStorage S3 service, using a bucket named `test
     -a ACCESS_KEY \
     -s SECRET_KEY \
     -b testbucket \
-    -u https://s3.YOUR_CUSTOMER_NAME.rstorlabs.io \
+    -u https://s3.YOUR_CUSTOMER_NAME.rstorcloud.io \
     -t 4 \
     -z 10M \
     -d 90 \
@@ -178,7 +178,7 @@ You can test also different combinations of multipart parallel transfers with di
     -a ACCESS_KEY \
     -s SECRET_KEY \
     -b testbucket \
-    -u https://s3.YOUR_CUSTOMER_NAME.rstorlabs.io \
+    -u https://s3.YOUR_CUSTOMER_NAME.rstorcloud.io \
     -multipart \
     -multipart-concurrency 3 \
     -multipart-size "100M" \
