@@ -27,7 +27,6 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -35,6 +34,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type S3AwsV2 struct {
@@ -119,7 +120,7 @@ func (u *S3AwsV2) DoDownload(ctx context.Context, id int) (result TransferResult
 
 	_ = resp.Body.Close()
 
-	if uint64(copied) != object_size {
+	if uint64(copied) != objectSize {
 		result.Error = fmt.Errorf("wrong response size")
 		return
 	}
@@ -128,7 +129,7 @@ func (u *S3AwsV2) DoDownload(ctx context.Context, id int) (result TransferResult
 }
 
 func (u *S3AwsV2) DoUpload(ctx context.Context, id int, data io.ReadSeeker) (result TransferResult) {
-	fileobj := bytes.NewReader(object_data)
+	fileobj := bytes.NewReader(objectData)
 
 	key := fmt.Sprintf("%s-%d", objPrefix, id)
 	path := fmt.Sprintf("%s/%s/%s", u.Host, u.Bucket, key)
@@ -136,7 +137,7 @@ func (u *S3AwsV2) DoUpload(ctx context.Context, id int, data io.ReadSeeker) (res
 	result.Id = id
 	req, _ := http.NewRequest("PUT", path, fileobj)
 	req = req.WithContext(ctx)
-	req.Header.Set("Content-Length", strconv.FormatUint(object_size, 10))
+	req.Header.Set("Content-Length", strconv.FormatUint(objectSize, 10))
 
 	// req.Header.Set("Content-MD5", object_data_md5)
 	setSignature(req, u.AccessKey, u.SecretKey)
@@ -163,7 +164,6 @@ func (u *S3AwsV2) DoUpload(ctx context.Context, id int, data io.ReadSeeker) (res
 	return result
 }
 
-
 func parseAmzHeaders(req *http.Request) string {
 	var headers []string
 	for header := range req.Header {
@@ -172,7 +172,7 @@ func parseAmzHeaders(req *http.Request) string {
 			headers = append(headers, norm)
 		}
 	}
-	
+
 	sort.Strings(headers)
 	for n, header := range headers {
 		headers[n] = header + ":" + strings.Replace(req.Header.Get(header), "\n", " ", -1)

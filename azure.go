@@ -120,7 +120,7 @@ func (u *AzureUploader) DoDownload(ctx context.Context, id int) (result Transfer
 		return
 	}
 
-	if uint64(copied) != object_size {
+	if uint64(copied) != objectSize {
 		result.Error = fmt.Errorf("wrong response size")
 		return
 	}
@@ -137,7 +137,7 @@ func (u *AzureUploader) DoUpload(ctx context.Context, id int, data io.ReadSeeker
 	blobURL := u.ContainerUrl.NewBlockBlobURL(key)
 
 	// const maxSinglePartSize = 100 * 1000 * 1000
-	var multipartPartSize = part_size
+	var multipartPartSize = partSize
 
 	if !u.UseMultipart {
 		_, err := blobURL.Upload(ctx, data,
@@ -153,17 +153,17 @@ func (u *AzureUploader) DoUpload(ctx context.Context, id int, data io.ReadSeeker
 		return
 	}
 
-	base64BlockIDs := make([]string, 0, object_size/multipartPartSize+1)
+	base64BlockIDs := make([]string, 0, objectSize/multipartPartSize+1)
 	blockIdx := 0
-	for sent := uint64(0); sent < object_size; {
+	for sent := uint64(0); sent < objectSize; {
 		partEnd := sent + multipartPartSize
 
-		if partEnd > object_size {
-			partEnd = object_size
+		if partEnd > objectSize {
+			partEnd = objectSize
 		}
 
 		base64BlockIDs = append(base64BlockIDs, blockIDIntToBase64(blockIdx))
-		part := object_data[sent:partEnd]
+		part := objectData[sent:partEnd]
 
 		// log.Infof("loading block %d", blockIdx)
 		_, err := blobURL.StageBlock(ctx, base64BlockIDs[blockIdx],

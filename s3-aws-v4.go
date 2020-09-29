@@ -23,14 +23,15 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"io/ioutil"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	log "github.com/sirupsen/logrus"
-	"io"
-	"io/ioutil"
 )
 
 var discarder = &DiscardWriterAt{}
@@ -64,12 +65,12 @@ func NewS3AwsV4(access_key, secret_key, url_host, region string) *S3AwsV4 {
 	}
 
 	uploader := s3manager.NewUploader(sess, func(u *s3manager.Uploader) {
-		u.PartSize = int64(part_size)
+		u.PartSize = int64(partSize)
 		u.Concurrency = multipartConcurrency
 	})
 
 	downloader := s3manager.NewDownloader(sess, func(d *s3manager.Downloader) {
-		d.PartSize = int64(part_size)
+		d.PartSize = int64(partSize)
 		d.Concurrency = multipartConcurrency
 	})
 
@@ -137,7 +138,7 @@ func (u *S3AwsV4) DoDownload(ctx context.Context, id int) (result TransferResult
 			return
 		}
 
-		if uint64(copied) != object_size {
+		if uint64(copied) != objectSize {
 			result.Error = fmt.Errorf("wrong response size")
 			return
 		}
