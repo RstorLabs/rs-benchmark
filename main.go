@@ -231,10 +231,11 @@ func main() {
 	fmt.Printf("%-15s%s\n", "Endpoint URL", urlHost)
 	fmt.Printf("%-15s%s\n", "Protocol", protocol)
 	fmt.Printf("%-15s%s\n", "Host ip", hostIPForPrinting)
-	fmt.Printf("%-15s%s\n", "Bucket", bucket)
 	if region != "" {
 		fmt.Printf("%-15s%s\n", "Region", region)
 	}
+	fmt.Printf("%-15s%s\n", "Bucket", bucket)
+	fmt.Printf("%-15s%s\n", "Prefix", objPrefix)
 	fmt.Printf("%-15s%d\n", "Test time", durationSecs)
 	fmt.Printf("%-15s%d\n", "Threads", threads)
 	fmt.Printf("%-15s%s\n", "Size", sizeArg)
