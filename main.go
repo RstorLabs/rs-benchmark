@@ -46,7 +46,7 @@ var (
 	objectData                   []byte
 	verbose                      bool
 	durationSecs, threads, loops int
-	successFulUploadsIDs         []int
+	successfulUploadIDs          []int
 	multipartConcurrency         int
 	objPrefix                    string
 	maxRetries                   int
@@ -68,7 +68,7 @@ func main() {
 	fl := flag.NewFlagSet("rs-benchmark", flag.ExitOnError)
 	fl.StringVar(&accessKey, "a", "", "Access key")
 	fl.StringVar(&secretKey, "s", "", "Secret key")
-	fl.StringVar(&urlHost, "u", "", "URL for endpoint with method prefix (e.g. https://s3.YOUR_CUSTOMER_NAME.rstorlabs.io)")
+	fl.StringVar(&urlHost, "u", "", "URL for endpoint with method prefix (e.g. https://s3.rstorcloud.io)")
 	fl.StringVar(&bucket, "b", "", "Bucket for testing")
 	fl.IntVar(&durationSecs, "d", 60, "Duration of each test in seconds")
 	fl.IntVar(&threads, "t", 1, "Number of parallel requests to run")
@@ -199,7 +199,7 @@ func main() {
 			fmt.Println("-region not supported for s3v2. Drop option.")
 			printHelpAndExit()
 		}
-		client = NewS3AwsV2(accessKey, secretKey, urlHost, region)
+		client = NewS3AwsV2(accessKey, secretKey, urlHost)
 	case "azure":
 		if region != "" {
 			fmt.Println("region param not supported yet")
@@ -274,7 +274,7 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 	fmt.Printf("\nStarting loop %d...\n", loop)
 
 	// Run the upload case
-	successFulUploadsIDs = make([]int, 0, 1000) // reused in download step
+	successfulUploadIDs = make([]int, 0, 1000) // reused in download step
 	totalDuration := float64(0)
 	indexes := make(chan int, threads)
 	res := make(chan TransferResult, threads)
@@ -295,16 +295,16 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 		if v.Error != nil {
 			continue
 		}
-		successFulUploadsIDs = append(successFulUploadsIDs, v.Id)
+		successfulUploadIDs = append(successfulUploadIDs, v.Id)
 		uploadedBytes += objectSize
 		uploadDurations = append(uploadDurations, v.Duration.Seconds())
 		totalDuration += v.Duration.Seconds()
 	}
 	sort.Float64s(uploadDurations)
 
-	// log.Info(successFulUploadsIDs)
-	successfulUploads := len(successFulUploadsIDs)
-	failedUploads := len(uploads) - len(successFulUploadsIDs)
+	// log.Info(successfulUploadIDs)
+	successfulUploads := len(successfulUploadIDs)
+	failedUploads := len(uploads) - len(successfulUploadIDs)
 	uploadMBps := (float64(uploadedBytes) / uploadTime) / (1000 * 1000)
 	uploadPerSecond := float64(successfulUploads) / uploadTime
 
@@ -313,7 +313,7 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 	fmt.Printf("%-9d%-6v%-11s%-7.2f%-12v%-8v%-8.2f%-12.2f\n",
 		threads, bytefmt.ByteSize(objectSize), "PUT", uploadTime, successfulUploads, failedUploads, uploadMBps, uploadPerSecond)
 
-	if len(successFulUploadsIDs) < 5 {
+	if len(successfulUploadIDs) < 5 {
 		if verbose == false {
 			log.Fatal("Not enough successful uploads to continue. For more information, run again with flag -v")
 		} else {
@@ -362,10 +362,10 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 	}
 
 	mbPs := (float64(downloadedBytes) / downloadTime) / (1000 * 1000)
-	getPerSecond := float64(successfulDownloads) / downloadTime
+	downloadsPerSecond := float64(successfulDownloads) / downloadTime
 
 	fmt.Printf("%-9d%-6v%-11s%-7.2f%-12v%-8v%-8.2f%-12.2f\n",
-		threads, bytefmt.ByteSize(objectSize), "GET", downloadTime, successfulDownloads, failedDownloads, mbPs, getPerSecond)
+		threads, bytefmt.ByteSize(objectSize), "GET", downloadTime, successfulDownloads, failedDownloads, mbPs, downloadsPerSecond)
 
 	if noCleanup {
 		fmt.Println("Not performing cleanup, as requested")
@@ -381,7 +381,7 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 	deleteChan := make(chan int)
 	deleteWg := sync.WaitGroup{}
 	deleteWg.Add(threads)
-	for n := 0; n <= threads; n++ {
+	for n := 0; n < threads; n++ {
 		go func() {
 			defer deleteWg.Done()
 
@@ -390,7 +390,7 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 			}
 		}()
 	}
-	for i, v := range successFulUploadsIDs {
+	for i, v := range successfulUploadIDs {
 		deleteChan <- v
 		if i > 0 && i%1000 == 0 {
 			fmt.Printf("%d deletes completed\n", i)
@@ -455,7 +455,7 @@ func runUpload(ctx context.Context, ids chan int, res chan TransferResult) {
 
 func runDownload(ctx context.Context, indexes chan int, res chan TransferResult) {
 	for id := range indexes {
-		idx := successFulUploadsIDs[id%len(successFulUploadsIDs)]
+		idx := successfulUploadIDs[id%len(successfulUploadIDs)]
 
 		startTime := time.Now()
 		r := client.DoDownload(ctx, idx)

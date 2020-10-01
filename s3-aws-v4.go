@@ -44,13 +44,13 @@ type S3AwsV4 struct {
 	MPDownloader *s3manager.Downloader
 }
 
-func NewS3AwsV4(access_key, secret_key, url_host, region string) *S3AwsV4 {
+func NewS3AwsV4(accessKey, secretKey, urlHost, region string) *S3AwsV4 {
 	awsConfig := &aws.Config{
 		Credentials: credentials.NewStaticCredentials(
-			access_key,
-			secret_key,
+			accessKey,
+			secretKey,
 			""),
-		Endpoint:                aws.String(url_host),
+		Endpoint:                aws.String(urlHost),
 		Region:                  aws.String(region),
 		DisableSSL:              aws.Bool(true),
 		DisableComputeChecksums: aws.Bool(true),

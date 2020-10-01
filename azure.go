@@ -153,7 +153,8 @@ func (u *AzureUploader) DoUpload(ctx context.Context, id int, data io.ReadSeeker
 		return
 	}
 
-	base64BlockIDs := make([]string, 0, objectSize/multipartPartSize+1)
+	nParts := numParts(objectSize, multipartPartSize)
+	base64BlockIDs := make([]string, 0, nParts)
 	blockIdx := 0
 	for sent := uint64(0); sent < objectSize; {
 		partEnd := sent + multipartPartSize
@@ -165,7 +166,6 @@ func (u *AzureUploader) DoUpload(ctx context.Context, id int, data io.ReadSeeker
 		base64BlockIDs = append(base64BlockIDs, blockIDIntToBase64(blockIdx))
 		part := objectData[sent:partEnd]
 
-		// log.Infof("loading block %d", blockIdx)
 		_, err := blobURL.StageBlock(ctx, base64BlockIDs[blockIdx],
 			bytes.NewReader(part), azblob.LeaseAccessConditions{},
 			nil)
@@ -180,7 +180,6 @@ func (u *AzureUploader) DoUpload(ctx context.Context, id int, data io.ReadSeeker
 	}
 
 	// After all the blocks are uploaded, atomically commit them to the blob.
-	// log.Info("committing blocklist", base64BlockIDs)
 	_, err = blobURL.CommitBlockList(ctx, base64BlockIDs, azblob.BlobHTTPHeaders{},
 		azblob.Metadata{}, azblob.BlobAccessConditions{})
 
@@ -213,4 +212,9 @@ func blockIDIntToBase64(blockID int) string {
 func blockIDBase64ToInt(blockID string) int {
 	blockIDBase64ToBinary(blockID)
 	return int(binary.LittleEndian.Uint32(blockIDBase64ToBinary(blockID)))
+}
+
+// https://stackoverflow.com/a/29925587
+func numParts(n uint64, multiple uint64) uint64 {
+	return (n + multiple - 1) / multiple
 }

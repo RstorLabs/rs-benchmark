@@ -137,7 +137,7 @@ func (u *GCP) DoUpload(ctx context.Context, id int, data io.ReadSeeker) (result 
 		return
 	}
 
-	if objectSize/multipartPartSize+1 > 32 {
+	if numParts(objectSize, multipartPartSize) > 32 {
 		log.Fatal("can't split in more than 32 parts")
 	}
 

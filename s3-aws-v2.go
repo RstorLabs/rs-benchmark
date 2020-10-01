@@ -45,11 +45,11 @@ type S3AwsV2 struct {
 	Host      string
 }
 
-func NewS3AwsV2(access_key, secret_key, url_host, region string) *S3AwsV2 {
+func NewS3AwsV2(accessKey, secretKey, urlHost string) *S3AwsV2 {
 	return &S3AwsV2{
-		AccessKey: access_key,
-		SecretKey: secret_key,
-		Host:      url_host,
+		AccessKey: accessKey,
+		SecretKey: secretKey,
+		Host:      urlHost,
 	}
 }
 
