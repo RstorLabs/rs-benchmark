@@ -22,7 +22,7 @@ require (
 	cloud.google.com/go v0.37.4
 	code.cloudfoundry.org/bytefmt v0.0.0-20180906201452-2aa6f33b730c
 	github.com/Azure/azure-storage-blob-go v0.6.0
-	github.com/aws/aws-sdk-go v1.34.14
+	github.com/aws/aws-sdk-go v1.35.0
 	github.com/golang/protobuf v1.3.1 // indirect
 	github.com/hashicorp/golang-lru v0.5.1 // indirect
 	github.com/konsorten/go-windows-terminal-sequences v1.0.2 // indirect
