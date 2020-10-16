@@ -191,6 +191,14 @@ func main() {
 		printHelpAndExit()
 	}
 
+	if multipartConcurrency <= 0 {
+		multipartConcurrency = 1
+	}
+
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+
 	switch protocol {
 	case "s3v4":
 		v4Client := NewS3AwsV4(accessKey, secretKey, urlHost, region)
@@ -255,7 +263,7 @@ func main() {
 	tabLine("Loops", loops)
 	if useMultipart {
 		tabLine("Multipart",
-			fmt.Sprintf(", %s per part, %d parallel uploads", multipartSizeArg, multipartConcurrency))
+			fmt.Sprintf("%s per part, %d parallel uploads", multipartSizeArg, multipartConcurrency))
 	} else {
 		tabLine("Multipart", "false")
 	}
