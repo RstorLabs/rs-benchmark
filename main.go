@@ -24,6 +24,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/binary"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -34,112 +37,100 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"text/tabwriter"
 	"time"
 
 	"code.cloudfoundry.org/bytefmt"
 	log "github.com/sirupsen/logrus"
 )
 
-var object_size uint64
-var part_size uint64
-var object_data []byte
-var verbose bool
-var duration_secs, threads, loops int
-var client Uploader
-var successFulUploadsIDs []int
-var multipartConcurrency int
-var objPrefix string
-var maxRetries int
-var version string
+var (
+	objectSize                   uint64
+	partSize                     uint64
+	objectData                   []byte
+	verbose                      bool
+	durationSecs, threads, loops int
+	successfulUploadIDs          []int
+	multipartConcurrency         int
+	objPrefix                    string
+	distributeKeys               bool
+	maxRetries                   int
+	noCleanup                    bool
+	noGet                        bool
+	client                       Uploader
+)
+
+const version = "1.1"
 
 func main() {
-
-	version = "1.0"
-
-	var access_key, secret_key, url_host, bucket, region, sizeArg, multipartSizeArg string
+	var accessKey, secretKey, urlHost, bucket, region, sizeArg, multipartSizeArg string
 	var protocol string
-	var useMultipart, help, showVersion bool
+	var useMultipart, showVersion bool
 	var pauseBetweenPhases bool
 	var hostIP string
 
 	// Parse command line
-	myflag := flag.NewFlagSet("rs-benchmark", flag.ExitOnError)
-	myflag.StringVar(&access_key, "a", "", "Access key")
-	myflag.StringVar(&secret_key, "s", "", "Secret key")
-	myflag.StringVar(&url_host, "u", "", "URL for endpoint with method prefix (e.g. https://s3.YOUR_CUSTOMER_NAME.rstorlabs.io)")
-	myflag.StringVar(&bucket, "b", "", "Bucket for testing")
-	myflag.BoolVar(&help, "h", false, "Show help screen")
-	myflag.IntVar(&duration_secs, "d", 60, "Duration of each test in seconds")
-	myflag.IntVar(&threads, "t", 1, "Number of parallel requests to run")
-	myflag.IntVar(&loops, "l", 1, "Number of times to repeat test")
-	myflag.BoolVar(&verbose, "v", false, "Verbose error output")
-	myflag.BoolVar(&showVersion, "version", false, "Show version")
-	myflag.StringVar(&region, "r", "", "Region for testing")
-	myflag.StringVar(&protocol, "protocol", "", "client protocol: s3v2, s3v4, azure, gcp")
-	myflag.BoolVar(&useMultipart, "multipart", false, "use multipart")
-	myflag.IntVar(&multipartConcurrency, "multipart-concurrency", 5, "concurrency to use for multipart requests")
-	myflag.BoolVar(&pauseBetweenPhases, "pause", false, "whether to pause between upload and download tests")
-	myflag.StringVar(&hostIP, "ip", "", "forces all hostnames to resolve to this address (s3v2, s3v4 only)")
-	myflag.StringVar(&objPrefix, "prefix", "Object", "will create objects with key: 'prefix-number'")
-	myflag.IntVar(&maxRetries, "maxRetries", 0, "number of retries on failure (default 0. s3v4 only)")
-	myflag.StringVar(&sizeArg, "z", "1M", "Size of objects in bytes with suffix K, M, and G")
-	myflag.StringVar(&multipartSizeArg, "multipart-size", "5M", "Size of the multipart chunks")
+	fl := flag.NewFlagSet("rs-benchmark", flag.ExitOnError)
+	fl.StringVar(&accessKey, "a", "", "Access key")
+	fl.StringVar(&secretKey, "s", "", "Secret key")
+	fl.StringVar(&urlHost, "u", "", "URL for endpoint with method prefix (e.g. https://s3.rstorcloud.io)")
+	fl.StringVar(&bucket, "b", "", "Bucket for testing")
+	fl.IntVar(&durationSecs, "d", 60, "Duration of each test in seconds")
+	fl.IntVar(&threads, "t", 1, "Number of parallel requests to run")
+	fl.IntVar(&loops, "l", 1, "Number of times to repeat test")
+	fl.BoolVar(&verbose, "v", false, "Verbose error output")
+	fl.BoolVar(&showVersion, "version", false, "Show version")
+	fl.StringVar(&region, "r", "", "Region for testing")
+	fl.StringVar(&protocol, "protocol", "", "client protocol: s3v2, s3v4, azure, gcp")
+	fl.BoolVar(&useMultipart, "multipart", false, "use multipart")
+	fl.IntVar(&multipartConcurrency, "multipart-concurrency", 5, "concurrency to use for multipart requests")
+	fl.BoolVar(&pauseBetweenPhases, "pause", false, "whether to pause between upload and download tests")
+	fl.BoolVar(&noCleanup, "no-cleanup", false, "do not cleanup inserted data")
+	fl.BoolVar(&noGet, "no-get", false, "do not perform GET part of test")
+	fl.StringVar(&hostIP, "ip", "", "forces all hostnames to resolve to this address (s3v2, s3v4 only)")
+	fl.StringVar(&objPrefix, "prefix", "Object", "will create objects with key: 'prefix/number'")
+	fl.BoolVar(&distributeKeys, "distribute-keys", true, "distribute keys over two levels of directories (65536 prefixes)")
+	fl.IntVar(&maxRetries, "max-retries", 0, "number of retries on failure (default 0. s3v4 only)")
+	fl.StringVar(&sizeArg, "z", "1M", "Size of objects in bytes with suffix K, M, and G")
+	fl.StringVar(&multipartSizeArg, "multipart-size", "5M", "Size of the multipart chunks")
 
-	//If no arguments are passed
-	if len(os.Args) == 1 {
-		fmt.Printf("usage: ./rs-benchmark [OPTIONS]\n\n")
-		fmt.Println("For help, run ./rs-benchmark -h.")
-		os.Exit(-1)
-	}
-
-	//for --help flag - need to find a more elegant solution
-	if os.Args[1] == "--help" {
+	switch err := fl.Parse(os.Args[1:]); err {
+	case flag.ErrHelp:
 		fmt.Println("Available arguments:")
-		myflag.PrintDefaults()
+		fl.PrintDefaults()
 		fmt.Println("")
 		os.Exit(0)
-	}
-
-	// Parse arguments
-	if err := myflag.Parse(os.Args[1:]); err != nil {
-		fmt.Println("Unable to parse flags")
-		printHelp()
+	case nil:
+	default:
+		fmt.Printf("Unable to parse flags %v\n", err)
 	}
 
 	// Check the arguments
-
 	if showVersion == true {
-		fmt.Printf("RStor rs-benchmark v%s.\n\n", version)
+		fmt.Printf("RSTOR rs-benchmark v%s.\n\n", version)
 		os.Exit(0)
 	}
 
 	fmt.Printf("rs-benchmark v%s - a compact tool for benchmarking different object storages\n", version)
-	fmt.Println("Copyright (C) 2016-2019 RStor Inc (open-source@rstor.io)")
-	fmt.Println("Released under GPL v3 license\n")
-
-	if help == true {
-		fmt.Println("Available arguments:")
-		myflag.PrintDefaults()
-		fmt.Println("")
-		os.Exit(0)
-	}
+	fmt.Println("Copyright (C) 2016-2020 RStor Inc (open-source@rstor.io)")
+	fmt.Println("Released under GPL v3 license")
+	fmt.Println()
 
 	if protocol == "" {
 		fmt.Println("Missing argument -protocol for client protocol.")
-		printHelp()
-
+		printHelpAndExit()
 	}
 
 	if protocol == "s3v4" && region == "" {
 		fmt.Println("Protocol s3v4 requires the region to be specified.")
-		printHelp()
+		printHelpAndExit()
 		os.Exit(-1)
 	}
 
 	hostIPForPrinting := ""
-	if hostIP == "" && url_host == "" {
+	if hostIP == "" && urlHost == "" {
 		fmt.Println("Missing host information.")
-		printHelp()
+		printHelpAndExit()
 	}
 
 	if hostIP != "" {
@@ -152,17 +143,17 @@ func main() {
 
 		hostIPForPrinting = hostIP
 	} else {
-		u, err := url.Parse(url_host)
+		u, err := url.Parse(urlHost)
 		if err != nil {
 			fmt.Println("Invalid url ", err)
-			printHelp()
+			printHelpAndExit()
 		}
 
 		host := strings.Split(u.Host, ":")[0]
 		ips, err := net.LookupIP(host)
 		if err != nil {
 			fmt.Println("Can't resolve host ", u.Host)
-			printHelp()
+			printHelpAndExit()
 		} else {
 			var ipStrings []string
 			for _, ip := range ips {
@@ -173,106 +164,123 @@ func main() {
 	}
 
 	if protocol != "gcp" {
-		if access_key == "" {
+		if accessKey == "" {
 			fmt.Println("Missing argument -a for access key.")
-			printHelp()
+			printHelpAndExit()
 		}
-		if secret_key == "" {
+		if secretKey == "" {
 			fmt.Println("Missing argument -s for secret key.")
-			printHelp()
+			printHelpAndExit()
 		}
 	}
 
 	if bucket == "" {
 		fmt.Println("Missing argument -b for bucket.")
-		printHelp()
+		printHelpAndExit()
 	}
 
 	var err error
 
-	if object_size, err = bytefmt.ToBytes(sizeArg); err != nil {
-		fmt.Println("Invalid -z argument for object size: %v", err)
-		printHelp()
+	if objectSize, err = bytefmt.ToBytes(sizeArg); err != nil {
+		fmt.Printf("Invalid -z argument for object size: %v\n", err)
+		printHelpAndExit()
 	}
 
-	if part_size, err = bytefmt.ToBytes(multipartSizeArg); err != nil {
-		fmt.Println("Invalid -multipart-size argument for part size: %v", err)
-		printHelp()
+	if partSize, err = bytefmt.ToBytes(multipartSizeArg); err != nil {
+		fmt.Printf("Invalid -multipart-size argument for part size: %v\n", err)
+		printHelpAndExit()
+	}
+
+	if multipartConcurrency <= 0 {
+		multipartConcurrency = 1
+	}
+
+	if maxRetries < 0 {
+		maxRetries = 0
 	}
 
 	switch protocol {
 	case "s3v4":
-		v4Client := NewS3AwsV4(access_key, secret_key, url_host, region)
+		v4Client := NewS3AwsV4(accessKey, secretKey, urlHost, region)
 		v4Client.UseMultipart = useMultipart
 		client = v4Client
 	case "s3v2":
 		if useMultipart {
 			fmt.Println("Multipart not supported")
-			printHelp()
+			printHelpAndExit()
 		}
 		if region != "" {
 			fmt.Println("-region not supported for s3v2. Drop option.")
-			printHelp()
+			printHelpAndExit()
 		}
-		client = NewS3AwsV2(access_key, secret_key, url_host, region)
+		client = NewS3AwsV2(accessKey, secretKey, urlHost)
 	case "azure":
 		if region != "" {
-			fmt.Println("region param not supported yet")
+			fmt.Println("region param not supported")
+			printHelpAndExit()
 		}
 		if useMultipart && multipartConcurrency > 1 {
 			fmt.Println("Multipart concurrency is fixed to one")
 			multipartConcurrency = 1
 		}
-		aup := NewAzureUploader(access_key, secret_key, url_host, region)
+		aup := NewAzureUploader(accessKey, secretKey, urlHost)
 		aup.UseMultipart = useMultipart
 		client = aup
 	case "gcp":
 		if region != "" {
-			fmt.Println("region param not supported yet")
+			fmt.Println("region param not supported")
+			printHelpAndExit()
 		}
 		if useMultipart && multipartConcurrency > 1 {
 			fmt.Println("Multipart concurrency is fixed to one")
 			multipartConcurrency = 1
 		}
-		gup := NewGCP(access_key, secret_key, url_host, region)
+		gup := NewGCP()
 		gup.UseMultipart = useMultipart
 		client = gup
 	default:
-		fmt.Println("unknown client type: available: s3v4, s3v2, azure, gpc")
-		printHelp()
+		fmt.Println("unknown client type. Available: s3v4, s3v2, azure, gpc")
+		printHelpAndExit()
 	}
 	fmt.Println("Benchmark parameters:")
 
-	fmt.Printf("%-15s%s\n", "Endpoint URL", url_host)
-	fmt.Printf("%-15s%s\n", "Protocol", protocol)
-	fmt.Printf("%-15s%s\n", "Host ip", hostIPForPrinting)
-	fmt.Printf("%-15s%s\n", "Bucket", bucket)
+	tw := tabwriter.NewWriter(os.Stdout, 16, 2, 1, ' ', 0)
+	tabLine := func(name string, value interface{}) {
+		_, _ = fmt.Fprint(tw, name, "\t", value, "\n")
+	}
+	tabLine("Endpoint URL", urlHost)
+	tabLine("Protocol", protocol)
+	tabLine("Host ip", hostIPForPrinting)
 	if region != "" {
-		fmt.Printf("%-15s%s\n", "Region", region)
+		tabLine("Region", region)
 	}
-	fmt.Printf("%-15s%d\n", "Test time", duration_secs)
-	fmt.Printf("%-15s%d\n", "Threads", threads)
-	fmt.Printf("%-15s%s\n", "Size", sizeArg)
-	fmt.Printf("%-15s%d\n", "Loops", loops)
-	fmt.Printf("%-15s%t", "Multipart", useMultipart)
-	if useMultipart == true {
-		fmt.Printf(", %s per part, %d parallel uploads", multipartSizeArg, multipartConcurrency)
+	tabLine("Bucket", bucket)
+	tabLine("Prefix", objPrefix)
+	tabLine("Distribute keys", distributeKeys)
+	tabLine("Test time", durationSecs)
+	tabLine("Threads", threads)
+	tabLine("Size", sizeArg)
+	tabLine("Loops", loops)
+	if useMultipart {
+		tabLine("Multipart",
+			fmt.Sprintf("%s per part, %d parallel uploads", multipartSizeArg, multipartConcurrency))
+	} else {
+		tabLine("Multipart", "false")
 	}
-	fmt.Println("")
-	fmt.Printf("%-15s%d\n", "Max retries", maxRetries)
+	tabLine("Max retries", maxRetries)
+	_ = tw.Flush()
+	fmt.Println()
 
 	// Test access to the bucket
 	err = client.Prepare(bucket)
 	if err != nil {
-		log.Fatal(err)
-		fmt.Println("For more information, run again with flag -v.")
+		log.Fatalf("error preparing the bucket: %v\n" +
+			"For more information, run again with flag -v.")
 	}
 
 	// Initialize data for the bucket
-	object_data = make([]byte, object_size)
-	rand.Read(object_data)
-	// hasher := md5.New()
-	// hasher.Write(object_data)
+	objectData = make([]byte, objectSize)
+	rand.Read(objectData)
 
 	// Loop running the tests
 	for loop := 1; loop <= loops; loop++ {
@@ -284,16 +292,17 @@ func main() {
 
 func runLoop(loop int, pauseBetweenPhases bool) {
 	if loop > 1 && pauseBetweenPhases {
-		fmt.Println("Loop %d done", loop-1)
+		fmt.Printf("Loop %d done\n", loop-1)
 		pause()
 	}
 
-	fmt.Printf("\nStarting loop %d...\n", loop)
-	// Run the upload case
+	fmt.Printf("Starting loop %d...\n", loop)
 
+	// Run the upload case
+	successfulUploadIDs = make([]int, 0, 1000) // reused in download step
+	totalDuration := float64(0)
 	indexes := make(chan int, threads)
 	res := make(chan TransferResult, threads)
-	successFulUploadsIDs = make([]int, 0, 1000)
 
 	ctx, cancelRemainingUploads := context.WithCancel(context.Background())
 	for n := 0; n <= threads; n++ {
@@ -307,31 +316,33 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 
 	var uploadedBytes uint64
 	var uploadDurations []float64
-	var totalDuration float64
 	for _, v := range uploads {
 		if v.Error != nil {
 			continue
 		}
-		successFulUploadsIDs = append(successFulUploadsIDs, v.Id)
-		uploadedBytes += object_size
+		successfulUploadIDs = append(successfulUploadIDs, v.Id)
+		uploadedBytes += objectSize
 		uploadDurations = append(uploadDurations, v.Duration.Seconds())
 		totalDuration += v.Duration.Seconds()
 	}
 	sort.Float64s(uploadDurations)
 
-	// log.Info(successFulUploadsIDs)
-	successfulUploads := len(successFulUploadsIDs)
-	failedUploads := len(uploads) - len(successFulUploadsIDs)
+	// log.Info(successfulUploadIDs)
+	successfulUploads := len(successfulUploadIDs)
+	failedUploads := len(uploads) - len(successfulUploadIDs)
 	uploadMBps := (float64(uploadedBytes) / uploadTime) / (1000 * 1000)
+	uploadPerSecond := float64(successfulUploads) / uploadTime
 
-	fmt.Printf("%-9s%-6s%-11s%-7s%-12s%-8s%-6s\n", "Threads", "Size", "Operation", "Time", "Successful", "Failed", "MBps")
-	fmt.Printf("%-9d%-6v%-11s%-7.2f%-12v%-8v%-6.2f\n",
-		threads, bytefmt.ByteSize(object_size), "PUT", uploadTime, successfulUploads, failedUploads, uploadMBps)
+	fmt.Printf("%-9s%-6s%-11s%-7s%-12s%-8s%-8s%-12s\n",
+		"Threads", "Size", "Operation", "Time", "Successful", "Failed", "MBps", "OPps")
+	fmt.Printf("%-9d%-6v%-11s%-7.2f%-12v%-8v%-8.2f%-12.2f\n",
+		threads, bytefmt.ByteSize(objectSize), "PUT", uploadTime, successfulUploads, failedUploads, uploadMBps, uploadPerSecond)
 
-	if len(successFulUploadsIDs) < 5 {
-		log.Fatal("Not enough successful uploads to continue.")
+	if len(successfulUploadIDs) < 5 {
 		if verbose == false {
-			fmt.Println("For more information, run again with flag -v.")
+			log.Fatal("Not enough successful uploads to continue. For more information, run again with flag -v")
+		} else {
+			log.Fatal("Not enough successful uploads to continue.")
 		}
 	}
 
@@ -363,7 +374,7 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 			failedDownloads++
 		} else {
 			successfulDownloads++
-			downloadedBytes += object_size
+			downloadedBytes += objectSize
 			totalDuration += d.Duration.Seconds()
 			downloadDurations = append(downloadDurations, d.Duration.Seconds())
 		}
@@ -371,14 +382,20 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 	sort.Float64s(downloadDurations)
 
 	if successfulDownloads == 0 {
-		log.Fatal("All downloads failed")
-		fmt.Println("For more information, run again with flag -v.")
+		log.Fatal("All downloads failed\n" +
+			"For more information, run again with flag -v.")
 	}
 
 	mbPs := (float64(downloadedBytes) / downloadTime) / (1000 * 1000)
+	downloadsPerSecond := float64(successfulDownloads) / downloadTime
 
-	fmt.Printf("%-9d%-6v%-11s%-7.2f%-12v%-8v%-6.2f\n",
-		threads, bytefmt.ByteSize(object_size), "GET", downloadTime, successfulDownloads, failedDownloads, mbPs)
+	fmt.Printf("%-9d%-6v%-11s%-7.2f%-12v%-8v%-8.2f%-12.2f\n",
+		threads, bytefmt.ByteSize(objectSize), "GET", downloadTime, successfulDownloads, failedDownloads, mbPs, downloadsPerSecond)
+
+	if noCleanup {
+		fmt.Println("Not performing cleanup, as requested")
+		return
+	}
 
 	if pauseBetweenPhases {
 		pause()
@@ -389,18 +406,18 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 	deleteChan := make(chan int)
 	deleteWg := sync.WaitGroup{}
 	deleteWg.Add(threads)
-	for n := 0; n <= threads; n++ {
+	for n := 0; n < threads; n++ {
 		go func() {
 			defer deleteWg.Done()
 
 			for idx := range deleteChan {
-				_ = client.DoDelete(ctx, idx)
+				_ = client.DoDelete(ctx, objectKey(idx))
 			}
 		}()
 	}
-	for i, v := range successFulUploadsIDs {
+	for i, v := range successfulUploadIDs {
 		deleteChan <- v
-		if i > 0 && i%1000 == 0 {
+		if i > 0 && i%10000 == 0 {
 			fmt.Printf("%d deletes completed\n", i)
 		}
 	}
@@ -415,7 +432,7 @@ func runAndCollectResults(indexes chan int, res chan TransferResult) []TransferR
 	}
 
 	results := make([]TransferResult, 0, 1000)
-	deadline := time.After(time.Second * time.Duration(duration_secs))
+	deadline := time.After(time.Second * time.Duration(durationSecs))
 
 Loop:
 	for {
@@ -444,18 +461,16 @@ type TransferResult struct {
 
 func runUpload(ctx context.Context, ids chan int, res chan TransferResult) {
 	for id := range ids {
-		reader := bytes.NewReader(object_data)
+		reader := bytes.NewReader(objectData)
 
 		startTime := time.Now()
-		r := client.DoUpload(ctx, id, reader)
+		r := client.DoUpload(ctx, objectKey(id), reader)
 
 		r.Duration = time.Now().Sub(startTime)
 		r.Id = id
 
 		if r.Error != nil && verbose {
-			if strings.Contains(r.Error.Error(), "context canceled") {
-				log.Info(r.Error)
-			} else {
+			if !strings.Contains(r.Error.Error(), "context canceled") {
 				log.Error(r.Error)
 			}
 		}
@@ -463,20 +478,42 @@ func runUpload(ctx context.Context, ids chan int, res chan TransferResult) {
 	}
 }
 
+func objectKey(idx int) string {
+	if !distributeKeys {
+		return fmt.Sprintf("%s/%d", objPrefix, idx)
+	}
+
+	// hash the index
+	bin := make([]byte, 8)
+	binary.LittleEndian.PutUint64(bin, uint64(idx))
+	sum := md5.Sum(bin)
+	hexStr := hex.EncodeToString(sum[:])
+
+	// format hex string to xx/yy/zzzzzzzzzzzzzzzzzzzzzzzzzzzz
+	b := strings.Builder{}
+	b.WriteString(objPrefix)
+	b.WriteString("/")
+	b.WriteString(hexStr[:2])
+	b.WriteString("/")
+	b.WriteString(hexStr[2:4])
+	b.WriteString("/")
+	b.WriteString(hexStr[4:])
+
+	return b.String()
+}
+
 func runDownload(ctx context.Context, indexes chan int, res chan TransferResult) {
 	for id := range indexes {
-		idx := successFulUploadsIDs[id%len(successFulUploadsIDs)]
+		idx := successfulUploadIDs[id%len(successfulUploadIDs)]
 
 		startTime := time.Now()
-		r := client.DoDownload(ctx, idx)
+		r := client.DoDownload(ctx, objectKey(idx))
 
 		r.Duration = time.Now().Sub(startTime)
 		r.Id = id
 
 		if r.Error != nil && verbose {
-			if strings.Contains(r.Error.Error(), "context canceled") {
-				log.Info(r.Error)
-			} else {
+			if !strings.Contains(r.Error.Error(), "context canceled") {
 				log.Error(r.Error)
 			}
 		}
@@ -489,7 +526,7 @@ func pause() {
 	_, _ = bufio.NewReader(os.Stdin).ReadBytes('\n')
 }
 
-func printHelp() {
+func printHelpAndExit() {
 	fmt.Print("Abort.\n\nRun \"./rs-benchmark --help\" for usage.\n")
 	os.Exit(-1)
 }

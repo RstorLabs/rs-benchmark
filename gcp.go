@@ -42,7 +42,7 @@ type GCP struct {
 	MPDownloader *s3manager.Downloader
 }
 
-func NewGCP(access_key, secret_key, url_host, region string) *GCP {
+func NewGCP() *GCP {
 	ctx := context.TODO()
 	client, err := gstorage.NewClient(ctx)
 	if err != nil {
@@ -59,21 +59,13 @@ func (u *GCP) Prepare(bucketName string) error {
 	return nil
 }
 
-func (u *GCP) DoDelete(ctx context.Context, id int) error {
-	key := fmt.Sprintf("%s-%d", objPrefix, id)
-
-	err := u.Bucket.Object(key).Delete(ctx)
-	if err != nil {
-		log.Errorf("Error deleting object %s: %v", key, err)
-	}
-	return err
+func (u *GCP) DoDelete(ctx context.Context, key string) error {
+	return u.Bucket.Object(key).Delete(ctx)
 }
 
-func (u *GCP) DoDownload(ctx context.Context, id int) (result TransferResult) {
+func (u *GCP) DoDownload(ctx context.Context, key string) (result TransferResult) {
 	var err error
 	var copied int64
-
-	key := fmt.Sprintf("%s-%d", objPrefix, id)
 
 	objReader, err := u.Bucket.Object(key).NewReader(ctx)
 
@@ -98,7 +90,7 @@ func (u *GCP) DoDownload(ctx context.Context, id int) (result TransferResult) {
 		return
 	}
 
-	if uint64(copied) != object_size {
+	if uint64(copied) != objectSize {
 		result.Error = fmt.Errorf("wrong response size")
 		return
 	}
@@ -106,17 +98,13 @@ func (u *GCP) DoDownload(ctx context.Context, id int) (result TransferResult) {
 	return
 }
 
-func (u *GCP) DoUpload(ctx context.Context, id int, data io.ReadSeeker) (result TransferResult) {
-	key := fmt.Sprintf("%s-%d", objPrefix, id)
-
+func (u *GCP) DoUpload(ctx context.Context, key string, objReader io.ReadSeeker) (result TransferResult) {
 	var err error
 
-	var multipartPartSize = part_size
+	var multipartPartSize = partSize
 
 	if !u.UseMultipart {
-		objReader := bytes.NewReader(object_data)
-
-		multipartPartSize = object_size
+		multipartPartSize = objectSize
 		objWriter := u.Bucket.Object(key).NewWriter(ctx)
 		_, err = io.Copy(objWriter, objReader)
 
@@ -137,20 +125,20 @@ func (u *GCP) DoUpload(ctx context.Context, id int, data io.ReadSeeker) (result 
 		return
 	}
 
-	if object_size/multipartPartSize+1 > 32 {
+	if numParts(objectSize, multipartPartSize) > 32 {
 		log.Fatal("can't split in more than 32 parts")
 	}
 
 	index := 0
 	uploadedObjects := make([]*gstorage.ObjectHandle, 0, 32)
-	for sent := uint64(0); sent < object_size; {
+	for sent := uint64(0); sent < objectSize; {
 		partEnd := sent + multipartPartSize
 
-		if partEnd > object_size {
-			partEnd = object_size
+		if partEnd > objectSize {
+			partEnd = objectSize
 		}
 
-		part := object_data[sent:partEnd]
+		part := objectData[sent:partEnd]
 
 		partKey := fmt.Sprintf("%s_%d", key, index)
 
@@ -184,12 +172,9 @@ func (u *GCP) DoUpload(ctx context.Context, id int, data io.ReadSeeker) (result 
 	composer := u.Bucket.Object(key).ComposerFrom(uploadedObjects...)
 	_, err = composer.Run(ctx)
 
-	result.Id = id
-
 	if err != nil {
 		result.Error = errors.Wrapf(err, "error composing object %s", key)
 		return
 	}
-
 	return
 }

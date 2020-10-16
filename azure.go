@@ -41,8 +41,8 @@ type AzureUploader struct {
 	UseMultipart bool
 }
 
-func NewAzureUploader(access_key, secret_key, url_host, region string) *AzureUploader {
-	credential, err := azblob.NewSharedKeyCredential(access_key, secret_key)
+func NewAzureUploader(accessKey, secretKey, urlHost string) *AzureUploader {
+	credential, err := azblob.NewSharedKeyCredential(accessKey, secretKey)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func NewAzureUploader(access_key, secret_key, url_host, region string) *AzureUpl
 	pipelineOpts := azblob.PipelineOptions{Retry: azblob.RetryOptions{TryTimeout: time.Hour * 6}}
 	p := azblob.NewPipeline(credential, pipelineOpts)
 
-	u, err := url.Parse(url_host) // https://$ACCOUNT_NAME.blob.core.windows.net
+	u, err := url.Parse(urlHost) // https://$ACCOUNT_NAME.blob.core.windows.net
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -79,8 +79,7 @@ func (u *AzureUploader) Prepare(bucket string) error {
 	return nil
 }
 
-func (u *AzureUploader) DoDelete(ctx context.Context, id int) error {
-	key := fmt.Sprintf("%s-%d", objPrefix, id)
+func (u *AzureUploader) DoDelete(ctx context.Context, key string) error {
 	blobURL := u.ContainerUrl.NewBlockBlobURL(key)
 
 	_, err := blobURL.Delete(ctx,
@@ -93,8 +92,7 @@ func (u *AzureUploader) DoDelete(ctx context.Context, id int) error {
 	return err
 }
 
-func (u *AzureUploader) DoDownload(ctx context.Context, id int) (result TransferResult) {
-	key := fmt.Sprintf("%s-%d", objPrefix, id)
+func (u *AzureUploader) DoDownload(ctx context.Context, key string) (result TransferResult) {
 	blobURL := u.ContainerUrl.NewBlockBlobURL(key)
 
 	get, err := blobURL.Download(ctx, 0, 0,
@@ -120,7 +118,7 @@ func (u *AzureUploader) DoDownload(ctx context.Context, id int) (result Transfer
 		return
 	}
 
-	if uint64(copied) != object_size {
+	if uint64(copied) != objectSize {
 		result.Error = fmt.Errorf("wrong response size")
 		return
 	}
@@ -128,16 +126,12 @@ func (u *AzureUploader) DoDownload(ctx context.Context, id int) (result Transfer
 	return
 }
 
-func (u *AzureUploader) DoUpload(ctx context.Context, id int, data io.ReadSeeker) (result TransferResult) {
+func (u *AzureUploader) DoUpload(ctx context.Context, key string, data io.ReadSeeker) (result TransferResult) {
 	var err error
-
-	result.Id = id
-
-	key := fmt.Sprintf("%s-%d", objPrefix, id)
 	blobURL := u.ContainerUrl.NewBlockBlobURL(key)
 
 	// const maxSinglePartSize = 100 * 1000 * 1000
-	var multipartPartSize = part_size
+	var multipartPartSize = partSize
 
 	if !u.UseMultipart {
 		_, err := blobURL.Upload(ctx, data,
@@ -153,19 +147,19 @@ func (u *AzureUploader) DoUpload(ctx context.Context, id int, data io.ReadSeeker
 		return
 	}
 
-	base64BlockIDs := make([]string, 0, object_size/multipartPartSize+1)
+	nParts := numParts(objectSize, multipartPartSize)
+	base64BlockIDs := make([]string, 0, nParts)
 	blockIdx := 0
-	for sent := uint64(0); sent < object_size; {
+	for sent := uint64(0); sent < objectSize; {
 		partEnd := sent + multipartPartSize
 
-		if partEnd > object_size {
-			partEnd = object_size
+		if partEnd > objectSize {
+			partEnd = objectSize
 		}
 
 		base64BlockIDs = append(base64BlockIDs, blockIDIntToBase64(blockIdx))
-		part := object_data[sent:partEnd]
+		part := objectData[sent:partEnd]
 
-		// log.Infof("loading block %d", blockIdx)
 		_, err := blobURL.StageBlock(ctx, base64BlockIDs[blockIdx],
 			bytes.NewReader(part), azblob.LeaseAccessConditions{},
 			nil)
@@ -180,7 +174,6 @@ func (u *AzureUploader) DoUpload(ctx context.Context, id int, data io.ReadSeeker
 	}
 
 	// After all the blocks are uploaded, atomically commit them to the blob.
-	// log.Info("committing blocklist", base64BlockIDs)
 	_, err = blobURL.CommitBlockList(ctx, base64BlockIDs, azblob.BlobHTTPHeaders{},
 		azblob.Metadata{}, azblob.BlobAccessConditions{})
 
@@ -213,4 +206,9 @@ func blockIDIntToBase64(blockID int) string {
 func blockIDBase64ToInt(blockID string) int {
 	blockIDBase64ToBinary(blockID)
 	return int(binary.LittleEndian.Uint32(blockIDBase64ToBinary(blockID)))
+}
+
+// https://stackoverflow.com/a/29925587
+func numParts(n uint64, multiple uint64) uint64 {
+	return (n + multiple - 1) / multiple
 }

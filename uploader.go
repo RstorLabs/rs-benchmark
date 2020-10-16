@@ -27,7 +27,7 @@ import (
 
 type Uploader interface {
 	Prepare(bucket string) error
-	DoDelete(ctx context.Context, id int) error
-	DoDownload(ctx context.Context, id int) (result TransferResult)
-	DoUpload(ctx context.Context, id int, data io.ReadSeeker) (result TransferResult)
+	DoDelete(ctx context.Context, key string) error
+	DoDownload(ctx context.Context, key string) (result TransferResult)
+	DoUpload(ctx context.Context, key string, data io.ReadSeeker) (result TransferResult)
 }
