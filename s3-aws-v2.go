@@ -21,7 +21,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha1"
@@ -58,11 +57,11 @@ func (u *S3AwsV2) Prepare(bucket string) error {
 	return nil
 }
 
-func (u *S3AwsV2) DoDelete(ctx context.Context, id int) error {
-	key := fmt.Sprintf("%s-%d", objPrefix, id)
+func (u *S3AwsV2) DoDelete(ctx context.Context, key string) error {
 	path := fmt.Sprintf("%s/%s/%s", u.Host, u.Bucket, key)
 
 	req, _ := http.NewRequest("DELETE", path, nil)
+	req = req.WithContext(ctx)
 
 	setSignature(req, u.AccessKey, u.SecretKey)
 
@@ -77,8 +76,7 @@ func (u *S3AwsV2) DoDelete(ctx context.Context, id int) error {
 	return err
 }
 
-func (u *S3AwsV2) DoDownload(ctx context.Context, id int) (result TransferResult) {
-	key := fmt.Sprintf("%s-%d", objPrefix, id)
+func (u *S3AwsV2) DoDownload(ctx context.Context, key string) (result TransferResult) {
 	path := fmt.Sprintf("%s/%s/%s", u.Host, u.Bucket, key)
 
 	req, _ := http.NewRequest("GET", path, nil)
@@ -128,14 +126,10 @@ func (u *S3AwsV2) DoDownload(ctx context.Context, id int) (result TransferResult
 	return
 }
 
-func (u *S3AwsV2) DoUpload(ctx context.Context, id int, data io.ReadSeeker) (result TransferResult) {
-	fileobj := bytes.NewReader(objectData)
-
-	key := fmt.Sprintf("%s-%d", objPrefix, id)
+func (u *S3AwsV2) DoUpload(ctx context.Context, key string, data io.ReadSeeker) (result TransferResult) {
 	path := fmt.Sprintf("%s/%s/%s", u.Host, u.Bucket, key)
 
-	result.Id = id
-	req, _ := http.NewRequest("PUT", path, fileobj)
+	req, _ := http.NewRequest("PUT", path, data)
 	req = req.WithContext(ctx)
 	req.Header.Set("Content-Length", strconv.FormatUint(objectSize, 10))
 

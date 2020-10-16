@@ -41,8 +41,8 @@ type AzureUploader struct {
 	UseMultipart bool
 }
 
-func NewAzureUploader(access_key, secret_key, url_host, region string) *AzureUploader {
-	credential, err := azblob.NewSharedKeyCredential(access_key, secret_key)
+func NewAzureUploader(accessKey, secretKey, urlHost string) *AzureUploader {
+	credential, err := azblob.NewSharedKeyCredential(accessKey, secretKey)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func NewAzureUploader(access_key, secret_key, url_host, region string) *AzureUpl
 	pipelineOpts := azblob.PipelineOptions{Retry: azblob.RetryOptions{TryTimeout: time.Hour * 6}}
 	p := azblob.NewPipeline(credential, pipelineOpts)
 
-	u, err := url.Parse(url_host) // https://$ACCOUNT_NAME.blob.core.windows.net
+	u, err := url.Parse(urlHost) // https://$ACCOUNT_NAME.blob.core.windows.net
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -79,8 +79,7 @@ func (u *AzureUploader) Prepare(bucket string) error {
 	return nil
 }
 
-func (u *AzureUploader) DoDelete(ctx context.Context, id int) error {
-	key := fmt.Sprintf("%s-%d", objPrefix, id)
+func (u *AzureUploader) DoDelete(ctx context.Context, key string) error {
 	blobURL := u.ContainerUrl.NewBlockBlobURL(key)
 
 	_, err := blobURL.Delete(ctx,
@@ -93,8 +92,7 @@ func (u *AzureUploader) DoDelete(ctx context.Context, id int) error {
 	return err
 }
 
-func (u *AzureUploader) DoDownload(ctx context.Context, id int) (result TransferResult) {
-	key := fmt.Sprintf("%s-%d", objPrefix, id)
+func (u *AzureUploader) DoDownload(ctx context.Context, key string) (result TransferResult) {
 	blobURL := u.ContainerUrl.NewBlockBlobURL(key)
 
 	get, err := blobURL.Download(ctx, 0, 0,
@@ -128,12 +126,8 @@ func (u *AzureUploader) DoDownload(ctx context.Context, id int) (result Transfer
 	return
 }
 
-func (u *AzureUploader) DoUpload(ctx context.Context, id int, data io.ReadSeeker) (result TransferResult) {
+func (u *AzureUploader) DoUpload(ctx context.Context, key string, data io.ReadSeeker) (result TransferResult) {
 	var err error
-
-	result.Id = id
-
-	key := fmt.Sprintf("%s-%d", objPrefix, id)
 	blobURL := u.ContainerUrl.NewBlockBlobURL(key)
 
 	// const maxSinglePartSize = 100 * 1000 * 1000

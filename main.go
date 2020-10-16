@@ -24,6 +24,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/binary"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -34,6 +37,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"text/tabwriter"
 	"time"
 
 	"code.cloudfoundry.org/bytefmt"
@@ -49,13 +53,14 @@ var (
 	successfulUploadIDs          []int
 	multipartConcurrency         int
 	objPrefix                    string
+	distributeKeys               bool
 	maxRetries                   int
 	noCleanup                    bool
 	noGet                        bool
 	client                       Uploader
 )
 
-const version = "1.0"
+const version = "1.1"
 
 func main() {
 	var accessKey, secretKey, urlHost, bucket, region, sizeArg, multipartSizeArg string
@@ -83,8 +88,9 @@ func main() {
 	fl.BoolVar(&noCleanup, "no-cleanup", false, "do not cleanup inserted data")
 	fl.BoolVar(&noGet, "no-get", false, "do not perform GET part of test")
 	fl.StringVar(&hostIP, "ip", "", "forces all hostnames to resolve to this address (s3v2, s3v4 only)")
-	fl.StringVar(&objPrefix, "prefix", "Object", "will create objects with key: 'prefix-number'")
-	fl.IntVar(&maxRetries, "maxRetries", 0, "number of retries on failure (default 0. s3v4 only)")
+	fl.StringVar(&objPrefix, "prefix", "Object", "will create objects with key: 'prefix/number'")
+	fl.BoolVar(&distributeKeys, "distribute-keys", true, "distribute keys over two levels of directories (65536 prefixes)")
+	fl.IntVar(&maxRetries, "max-retries", 0, "number of retries on failure (default 0. s3v4 only)")
 	fl.StringVar(&sizeArg, "z", "1M", "Size of objects in bytes with suffix K, M, and G")
 	fl.StringVar(&multipartSizeArg, "multipart-size", "5M", "Size of the multipart chunks")
 
@@ -101,7 +107,7 @@ func main() {
 
 	// Check the arguments
 	if showVersion == true {
-		fmt.Printf("RStor rs-benchmark v%s.\n\n", version)
+		fmt.Printf("RSTOR rs-benchmark v%s.\n\n", version)
 		os.Exit(0)
 	}
 
@@ -202,56 +208,66 @@ func main() {
 		client = NewS3AwsV2(accessKey, secretKey, urlHost)
 	case "azure":
 		if region != "" {
-			fmt.Println("region param not supported yet")
+			fmt.Println("region param not supported")
+			printHelpAndExit()
 		}
 		if useMultipart && multipartConcurrency > 1 {
 			fmt.Println("Multipart concurrency is fixed to one")
 			multipartConcurrency = 1
 		}
-		aup := NewAzureUploader(accessKey, secretKey, urlHost, region)
+		aup := NewAzureUploader(accessKey, secretKey, urlHost)
 		aup.UseMultipart = useMultipart
 		client = aup
 	case "gcp":
 		if region != "" {
-			fmt.Println("region param not supported yet")
+			fmt.Println("region param not supported")
+			printHelpAndExit()
 		}
 		if useMultipart && multipartConcurrency > 1 {
 			fmt.Println("Multipart concurrency is fixed to one")
 			multipartConcurrency = 1
 		}
-		gup := NewGCP(accessKey, secretKey, urlHost, region)
+		gup := NewGCP()
 		gup.UseMultipart = useMultipart
 		client = gup
 	default:
-		fmt.Println("unknown client type: available: s3v4, s3v2, azure, gpc")
+		fmt.Println("unknown client type. Available: s3v4, s3v2, azure, gpc")
 		printHelpAndExit()
 	}
 	fmt.Println("Benchmark parameters:")
 
-	fmt.Printf("%-15s%s\n", "Endpoint URL", urlHost)
-	fmt.Printf("%-15s%s\n", "Protocol", protocol)
-	fmt.Printf("%-15s%s\n", "Host ip", hostIPForPrinting)
+	tw := tabwriter.NewWriter(os.Stdout, 16, 2, 1, ' ', 0)
+	tabLine := func(name string, value interface{}) {
+		_, _ = fmt.Fprint(tw, name, "\t", value, "\n")
+	}
+	tabLine("Endpoint URL", urlHost)
+	tabLine("Protocol", protocol)
+	tabLine("Host ip", hostIPForPrinting)
 	if region != "" {
-		fmt.Printf("%-15s%s\n", "Region", region)
+		tabLine("Region", region)
 	}
-	fmt.Printf("%-15s%s\n", "Bucket", bucket)
-	fmt.Printf("%-15s%s\n", "Prefix", objPrefix)
-	fmt.Printf("%-15s%d\n", "Test time", durationSecs)
-	fmt.Printf("%-15s%d\n", "Threads", threads)
-	fmt.Printf("%-15s%s\n", "Size", sizeArg)
-	fmt.Printf("%-15s%d\n", "Loops", loops)
-	fmt.Printf("%-15s%t", "Multipart", useMultipart)
-	if useMultipart == true {
-		fmt.Printf(", %s per part, %d parallel uploads", multipartSizeArg, multipartConcurrency)
+	tabLine("Bucket", bucket)
+	tabLine("Prefix", objPrefix)
+	tabLine("Distribute keys", distributeKeys)
+	tabLine("Test time", durationSecs)
+	tabLine("Threads", threads)
+	tabLine("Size", sizeArg)
+	tabLine("Loops", loops)
+	if useMultipart {
+		tabLine("Multipart",
+			fmt.Sprintf(", %s per part, %d parallel uploads", multipartSizeArg, multipartConcurrency))
+	} else {
+		tabLine("Multipart", "false")
 	}
-	fmt.Println("")
-	fmt.Printf("%-15s%d\n", "Max retries", maxRetries)
+	tabLine("Max retries", maxRetries)
+	_ = tw.Flush()
+	fmt.Println()
 
 	// Test access to the bucket
 	err = client.Prepare(bucket)
 	if err != nil {
-		log.Fatal(err)
-		fmt.Println("For more information, run again with flag -v.")
+		log.Fatalf("error preparing the bucket: %v\n" +
+			"For more information, run again with flag -v.")
 	}
 
 	// Initialize data for the bucket
@@ -272,7 +288,7 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 		pause()
 	}
 
-	fmt.Printf("\nStarting loop %d...\n", loop)
+	fmt.Printf("Starting loop %d...\n", loop)
 
 	// Run the upload case
 	successfulUploadIDs = make([]int, 0, 1000) // reused in download step
@@ -358,8 +374,8 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 	sort.Float64s(downloadDurations)
 
 	if successfulDownloads == 0 {
-		log.Fatal("All downloads failed")
-		fmt.Println("For more information, run again with flag -v.")
+		log.Fatal("All downloads failed\n" +
+			"For more information, run again with flag -v.")
 	}
 
 	mbPs := (float64(downloadedBytes) / downloadTime) / (1000 * 1000)
@@ -387,13 +403,13 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 			defer deleteWg.Done()
 
 			for idx := range deleteChan {
-				_ = client.DoDelete(ctx, idx)
+				_ = client.DoDelete(ctx, objectKey(idx))
 			}
 		}()
 	}
 	for i, v := range successfulUploadIDs {
 		deleteChan <- v
-		if i > 0 && i%1000 == 0 {
+		if i > 0 && i%10000 == 0 {
 			fmt.Printf("%d deletes completed\n", i)
 		}
 	}
@@ -440,7 +456,7 @@ func runUpload(ctx context.Context, ids chan int, res chan TransferResult) {
 		reader := bytes.NewReader(objectData)
 
 		startTime := time.Now()
-		r := client.DoUpload(ctx, id, reader)
+		r := client.DoUpload(ctx, objectKey(id), reader)
 
 		r.Duration = time.Now().Sub(startTime)
 		r.Id = id
@@ -454,12 +470,36 @@ func runUpload(ctx context.Context, ids chan int, res chan TransferResult) {
 	}
 }
 
+func objectKey(idx int) string {
+	if !distributeKeys {
+		return fmt.Sprintf("%s/%d", objPrefix, idx)
+	}
+
+	// hash the index
+	bin := make([]byte, 8)
+	binary.LittleEndian.PutUint64(bin, uint64(idx))
+	sum := md5.Sum(bin)
+	hexStr := hex.EncodeToString(sum[:])
+
+	// format hex string to xx/yy/zzzzzzzzzzzzzzzzzzzzzzzzzzzz
+	b := strings.Builder{}
+	b.WriteString(objPrefix)
+	b.WriteString("/")
+	b.WriteString(hexStr[:2])
+	b.WriteString("/")
+	b.WriteString(hexStr[2:4])
+	b.WriteString("/")
+	b.WriteString(hexStr[4:])
+
+	return b.String()
+}
+
 func runDownload(ctx context.Context, indexes chan int, res chan TransferResult) {
 	for id := range indexes {
 		idx := successfulUploadIDs[id%len(successfulUploadIDs)]
 
 		startTime := time.Now()
-		r := client.DoDownload(ctx, idx)
+		r := client.DoDownload(ctx, objectKey(idx))
 
 		r.Duration = time.Now().Sub(startTime)
 		r.Id = id

@@ -92,9 +92,7 @@ func (u *S3AwsV4) Prepare(bucket string) error {
 	return err
 }
 
-func (u *S3AwsV4) DoDelete(ctx context.Context, id int) error {
-	key := fmt.Sprintf("%s-%d", objPrefix, id)
-
+func (u *S3AwsV4) DoDelete(ctx context.Context, key string) error {
 	_, err := u.S3.DeleteObjectWithContext(ctx, &s3.DeleteObjectInput{
 		Bucket: &u.Bucket,
 		Key:    &key,
@@ -105,12 +103,10 @@ func (u *S3AwsV4) DoDelete(ctx context.Context, id int) error {
 	return err
 }
 
-func (u *S3AwsV4) DoDownload(ctx context.Context, id int) (result TransferResult) {
+func (u *S3AwsV4) DoDownload(ctx context.Context, key string) (result TransferResult) {
 	var err error
 	var getObjRes *s3.GetObjectOutput
 	var copied int64
-
-	key := fmt.Sprintf("%s-%d", objPrefix, id)
 
 	getObjInput := s3.GetObjectInput{
 		Bucket: &u.Bucket,
@@ -147,9 +143,7 @@ func (u *S3AwsV4) DoDownload(ctx context.Context, id int) (result TransferResult
 	return
 }
 
-func (u *S3AwsV4) DoUpload(ctx context.Context, id int, data io.ReadSeeker) (result TransferResult) {
-	key := fmt.Sprintf("%s-%d", objPrefix, id)
-
+func (u *S3AwsV4) DoUpload(ctx context.Context, key string, data io.ReadSeeker) (result TransferResult) {
 	var err error
 
 	if u.UseMultipart {
@@ -167,8 +161,6 @@ func (u *S3AwsV4) DoUpload(ctx context.Context, id int, data io.ReadSeeker) (res
 		}
 		_, err = u.S3.PutObjectWithContext(ctx, &putObjInput)
 	}
-
-	result.Id = id
 
 	if err != nil {
 		result.Error = fmt.Errorf("error uploading object %s: %v", key, err)
