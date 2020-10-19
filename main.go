@@ -349,9 +349,6 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 		}
 	}
 
-	close(indexes)
-	close(res)
-
 	if pauseBetweenPhases {
 		pause()
 	}
@@ -369,9 +366,6 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 	downloads := runAndCollectResults(indexes, res)
 	cancelRemainingDownloads()
 	downloadTime := time.Now().Sub(startTime).Seconds()
-
-	close(indexes)
-	close(res)
 
 	var successfulDownloads int
 	var failedDownloads int
@@ -439,11 +433,12 @@ func runAndCollectResults(indexes chan<- int, res <-chan TransferResult) []Trans
 		nextId         int
 		successUploads uint64
 	)
+
 	for nextId = 0; nextId < threads+1; nextId++ {
 		indexes <- nextId
 	}
 
-	results := make([]TransferResult, 0, 1000)
+	results := make([]TransferResult, 0, objects)
 	deadline := time.After(time.Second * time.Duration(durationSecs))
 
 Loop:
@@ -456,13 +451,13 @@ Loop:
 			if r.Error != nil {
 				indexes <- r.Id
 			} else {
-				indexes <- nextId
-				nextId = nextId + 1
 				successUploads++
 				// break out after N objects
 				if successUploads == objects {
-					break
+					break Loop
 				}
+				indexes <- nextId
+				nextId++
 			}
 		}
 	}
@@ -486,8 +481,11 @@ func runUpload(ctx context.Context, ids <-chan int, res chan<- TransferResult) {
 		r.Duration = time.Now().Sub(startTime)
 		r.Id = id
 
-		if r.Error != nil && verbose {
-			if !strings.Contains(r.Error.Error(), "context canceled") {
+		if r.Error != nil {
+			if r.Error == context.Canceled {
+				break
+			}
+			if verbose {
 				log.Error(r.Error)
 			}
 		}
@@ -529,8 +527,11 @@ func runDownload(ctx context.Context, indexes <-chan int, res chan<- TransferRes
 		r.Duration = time.Now().Sub(startTime)
 		r.Id = id
 
-		if r.Error != nil && verbose {
-			if !strings.Contains(r.Error.Error(), "context canceled") {
+		if r.Error != nil {
+			if r.Error == context.Canceled {
+				break
+			}
+			if verbose {
 				log.Error(r.Error)
 			}
 		}
