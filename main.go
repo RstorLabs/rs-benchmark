@@ -482,10 +482,7 @@ func runUpload(ctx context.Context, ids <-chan int, res chan<- TransferResult) {
 		r.Id = id
 
 		if r.Error != nil {
-			if r.Error == context.Canceled {
-				break
-			}
-			if verbose {
+			if !strings.Contains(r.Error.Error(), "context canceled") {
 				log.Error(r.Error)
 			}
 		}
@@ -528,10 +525,7 @@ func runDownload(ctx context.Context, indexes <-chan int, res chan<- TransferRes
 		r.Id = id
 
 		if r.Error != nil {
-			if r.Error == context.Canceled {
-				break
-			}
-			if verbose {
+			if !strings.Contains(r.Error.Error(), "context canceled") {
 				log.Error(r.Error)
 			}
 		}
