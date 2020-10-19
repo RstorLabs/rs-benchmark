@@ -57,6 +57,7 @@ var (
 	maxRetries                   int
 	noCleanup                    bool
 	noGet                        bool
+	objects                      uint64
 	client                       Uploader
 )
 
@@ -76,6 +77,7 @@ func main() {
 	fl.StringVar(&urlHost, "u", "", "URL for endpoint with method prefix (e.g. https://s3.rstorcloud.io)")
 	fl.StringVar(&bucket, "b", "", "Bucket for testing")
 	fl.IntVar(&durationSecs, "d", 60, "Duration of each test in seconds")
+	fl.Uint64Var(&objects, "objects", 0, "Number of objects to successfully upload/download")
 	fl.IntVar(&threads, "t", 1, "Number of parallel requests to run")
 	fl.IntVar(&loops, "l", 1, "Number of times to repeat test")
 	fl.BoolVar(&verbose, "v", false, "Verbose error output")
@@ -258,6 +260,7 @@ func main() {
 	tabLine("Prefix", objPrefix)
 	tabLine("Distribute keys", distributeKeys)
 	tabLine("Test time", durationSecs)
+	tabLine("Test objects", objects)
 	tabLine("Threads", threads)
 	tabLine("Size", sizeArg)
 	tabLine("Loops", loops)
@@ -425,13 +428,17 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 	deleteWg.Wait()
 }
 
-func runAndCollectResults(indexes chan int, res chan TransferResult) []TransferResult {
-	var nextId int
+func runAndCollectResults(indexes chan<- int, res <-chan TransferResult) []TransferResult {
+	var (
+		nextId         int
+		successUploads uint64
+	)
+
 	for nextId = 0; nextId < threads+1; nextId++ {
 		indexes <- nextId
 	}
 
-	results := make([]TransferResult, 0, 1000)
+	results := make([]TransferResult, 0, objects)
 	deadline := time.After(time.Second * time.Duration(durationSecs))
 
 Loop:
@@ -444,8 +451,13 @@ Loop:
 			if r.Error != nil {
 				indexes <- r.Id
 			} else {
+				successUploads++
+				// break out after N objects
+				if successUploads == objects {
+					break Loop
+				}
 				indexes <- nextId
-				nextId = nextId + 1
+				nextId++
 			}
 		}
 	}
@@ -459,7 +471,7 @@ type TransferResult struct {
 	Error    error
 }
 
-func runUpload(ctx context.Context, ids chan int, res chan TransferResult) {
+func runUpload(ctx context.Context, ids <-chan int, res chan<- TransferResult) {
 	for id := range ids {
 		reader := bytes.NewReader(objectData)
 
@@ -469,7 +481,7 @@ func runUpload(ctx context.Context, ids chan int, res chan TransferResult) {
 		r.Duration = time.Now().Sub(startTime)
 		r.Id = id
 
-		if r.Error != nil && verbose {
+		if r.Error != nil {
 			if !strings.Contains(r.Error.Error(), "context canceled") {
 				log.Error(r.Error)
 			}
@@ -502,7 +514,7 @@ func objectKey(idx int) string {
 	return b.String()
 }
 
-func runDownload(ctx context.Context, indexes chan int, res chan TransferResult) {
+func runDownload(ctx context.Context, indexes <-chan int, res chan<- TransferResult) {
 	for id := range indexes {
 		idx := successfulUploadIDs[id%len(successfulUploadIDs)]
 
@@ -512,7 +524,7 @@ func runDownload(ctx context.Context, indexes chan int, res chan TransferResult)
 		r.Duration = time.Now().Sub(startTime)
 		r.Id = id
 
-		if r.Error != nil && verbose {
+		if r.Error != nil {
 			if !strings.Contains(r.Error.Error(), "context canceled") {
 				log.Error(r.Error)
 			}
