@@ -64,15 +64,17 @@ func NewAzureUploader(accessKey, secretKey, urlHost string) *AzureUploader {
 }
 
 func (u *AzureUploader) Prepare(bucket string) error {
+	ctx := context.Background()
+
 	u.ContainerUrl = u.ServiceUrl.NewContainerURL(bucket)
 
 	// TODO: test if connection works
 	// Create the container on the service (with no metadata and no public access)
-	ctx := context.Background()
 
 	_, err := u.ContainerUrl.Create(ctx, azblob.Metadata{}, azblob.PublicAccessNone)
+
+	// TODO: correctly distinguish case in which bucket already exists
 	if err != nil {
-		// no idea how to check bucket exists, let's just log the error
 		log.Errorf("unable to create bucket %s", bucket)
 	}
 
@@ -86,9 +88,6 @@ func (u *AzureUploader) DoDelete(ctx context.Context, key string) error {
 		azblob.DeleteSnapshotsOptionNone,
 		azblob.BlobAccessConditions{})
 
-	if err != nil {
-		log.Errorf("Error deleting object %s: %v", key, err)
-	}
 	return err
 }
 
