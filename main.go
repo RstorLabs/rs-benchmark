@@ -36,12 +36,12 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"text/tabwriter"
 	"time"
 
 	"code.cloudfoundry.org/bytefmt"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -353,47 +353,49 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 		pause()
 	}
 
-	// Run the download case
-	indexes = make(chan int, threads)
-	res = make(chan TransferResult, 10)
+	if !noGet {
+		// Run the download case
+		indexes = make(chan int, threads)
+		res = make(chan TransferResult, 10)
 
-	ctx, cancelRemainingDownloads := context.WithCancel(context.Background())
-	for n := 0; n <= threads; n++ {
-		go runDownload(ctx, indexes, res)
-	}
-
-	startTime = time.Now()
-	downloads := runAndCollectResults(indexes, res)
-	cancelRemainingDownloads()
-	downloadTime := time.Now().Sub(startTime).Seconds()
-
-	var successfulDownloads int
-	var failedDownloads int
-	var downloadedBytes uint64
-	totalDuration = 0
-	var downloadDurations []float64
-	for _, d := range downloads {
-		if d.Error != nil {
-			failedDownloads++
-		} else {
-			successfulDownloads++
-			downloadedBytes += objectSize
-			totalDuration += d.Duration.Seconds()
-			downloadDurations = append(downloadDurations, d.Duration.Seconds())
+		ctx, cancelRemainingDownloads := context.WithCancel(context.Background())
+		for n := 0; n <= threads; n++ {
+			go runDownload(ctx, indexes, res)
 		}
+
+		startTime = time.Now()
+		downloads := runAndCollectResults(indexes, res)
+		cancelRemainingDownloads()
+		downloadTime := time.Now().Sub(startTime).Seconds()
+
+		var successfulDownloads int
+		var failedDownloads int
+		var downloadedBytes uint64
+		totalDuration = 0
+		var downloadDurations []float64
+		for _, d := range downloads {
+			if d.Error != nil {
+				failedDownloads++
+			} else {
+				successfulDownloads++
+				downloadedBytes += objectSize
+				totalDuration += d.Duration.Seconds()
+				downloadDurations = append(downloadDurations, d.Duration.Seconds())
+			}
+		}
+		sort.Float64s(downloadDurations)
+
+		if successfulDownloads == 0 {
+			log.Fatal("All downloads failed\n" +
+				"For more information, run again with flag -v.")
+		}
+
+		mbPs := (float64(downloadedBytes) / downloadTime) / (1000 * 1000)
+		downloadsPerSecond := float64(successfulDownloads) / downloadTime
+
+		fmt.Printf("%-9d%-6v%-11s%-7.2f%-12v%-8v%-8.2f%-12.2f\n",
+			threads, bytefmt.ByteSize(objectSize), "GET", downloadTime, successfulDownloads, failedDownloads, mbPs, downloadsPerSecond)
 	}
-	sort.Float64s(downloadDurations)
-
-	if successfulDownloads == 0 {
-		log.Fatal("All downloads failed\n" +
-			"For more information, run again with flag -v.")
-	}
-
-	mbPs := (float64(downloadedBytes) / downloadTime) / (1000 * 1000)
-	downloadsPerSecond := float64(successfulDownloads) / downloadTime
-
-	fmt.Printf("%-9d%-6v%-11s%-7.2f%-12v%-8v%-8.2f%-12.2f\n",
-		threads, bytefmt.ByteSize(objectSize), "GET", downloadTime, successfulDownloads, failedDownloads, mbPs, downloadsPerSecond)
 
 	if noCleanup {
 		fmt.Println("Not performing cleanup, as requested")
@@ -407,25 +409,44 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 	ctx = context.Background()
 	fmt.Println("Deleting test objects")
 	deleteChan := make(chan int)
-	deleteWg := sync.WaitGroup{}
-	deleteWg.Add(threads)
-	for n := 0; n < threads; n++ {
-		go func() {
-			defer deleteWg.Done()
 
-			for idx := range deleteChan {
-				_ = client.DoDelete(ctx, objectKey(idx))
+	deleteEg, deleteCtx := errgroup.WithContext(context.Background())
+	for n := 0; n < threads; n++ {
+		deleteEg.Go(func() error {
+			for {
+				select {
+				case idx, ok := <-deleteChan:
+					if !ok {
+						return nil
+					}
+					err := client.DoDelete(deleteCtx, objectKey(idx))
+					if err != nil {
+						return err
+					}
+				case <-deleteCtx.Done():
+					return deleteCtx.Err()
+				}
 			}
-		}()
+		})
 	}
-	for i, v := range successfulUploadIDs {
-		deleteChan <- v
-		if i > 0 && i%10000 == 0 {
-			fmt.Printf("%d deletes completed\n", i)
+	deleteEg.Go(func() error {
+		for i, v := range successfulUploadIDs {
+			select {
+			case deleteChan <- v:
+			case <-deleteCtx.Done():
+				close(deleteChan)
+				return deleteCtx.Err()
+			}
+			if i > 0 && i%100000 == 0 {
+				fmt.Printf("%d deletes completed\n", i)
+			}
 		}
+		close(deleteChan)
+		return nil
+	})
+	if err := deleteEg.Wait(); err != nil {
+		log.Fatal("Error while performing delete: ", err)
 	}
-	close(deleteChan)
-	deleteWg.Wait()
 }
 
 func runAndCollectResults(indexes chan<- int, res <-chan TransferResult) []TransferResult {

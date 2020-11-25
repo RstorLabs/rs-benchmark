@@ -33,8 +33,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	log "github.com/sirupsen/logrus"
 )
 
 type S3AwsV2 struct {
@@ -66,14 +64,18 @@ func (u *S3AwsV2) DoDelete(ctx context.Context, key string) error {
 	setSignature(req, u.AccessKey, u.SecretKey)
 
 	resp, err := httpClient.Do(req)
-
 	if err != nil {
-		log.Errorf("Error deleting object %s: %v", path, err)
-	} else if resp != nil && resp.StatusCode == http.StatusServiceUnavailable {
-		log.Errorf("Error deleting %s", path)
+		return err
 	}
 
-	return err
+	_ = resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusNoContent:
+		return nil
+	default:
+		return fmt.Errorf("received status code: %v", resp.StatusCode)
+	}
 }
 
 func (u *S3AwsV2) DoDownload(ctx context.Context, key string) (result TransferResult) {

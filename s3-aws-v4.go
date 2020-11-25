@@ -97,9 +97,6 @@ func (u *S3AwsV4) DoDelete(ctx context.Context, key string) error {
 		Bucket: &u.Bucket,
 		Key:    &key,
 	})
-	if err != nil {
-		log.Errorf("Error deleting object %s: %v", key, err)
-	}
 	return err
 }
 
