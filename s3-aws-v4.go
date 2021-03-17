@@ -122,10 +122,9 @@ func (u *S3AwsV4) DoDownload(ctx context.Context, key string) (result TransferRe
 	}
 
 	if !u.UseMultipart {
-		// manually receive the file
 		copied, err = io.Copy(ioutil.Discard, getObjRes.Body)
+		_ = getObjRes.Body.Close()
 
-		// set the duration again
 		if err != nil {
 			result.Error = fmt.Errorf("error receiving response %v", err.Error())
 			return

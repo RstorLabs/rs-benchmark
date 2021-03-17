@@ -29,17 +29,18 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"code.cloudfoundry.org/bytefmt"
+	"github.com/HdrHistogram/hdrhistogram-go"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )
@@ -59,6 +60,7 @@ var (
 	noGet                        bool
 	objects                      uint64
 	client                       Uploader
+	detailed                     bool
 )
 
 const version = "1.1"
@@ -90,11 +92,12 @@ func main() {
 	fl.BoolVar(&noCleanup, "no-cleanup", false, "do not cleanup inserted data")
 	fl.BoolVar(&noGet, "no-get", false, "do not perform GET part of test")
 	fl.StringVar(&hostIP, "ip", "", "forces all hostnames to resolve to this address (s3v2, s3v4 only)")
-	fl.StringVar(&objPrefix, "prefix", "Object", "will create objects with key: 'prefix/number'")
+	fl.StringVar(&objPrefix, "prefix", "", "will create objects with key: 'prefix/number', defaults to rsbench-$unixtimestamp")
 	fl.BoolVar(&distributeKeys, "distribute-keys", true, "distribute keys over two levels of directories (65536 prefixes)")
 	fl.IntVar(&maxRetries, "max-retries", 0, "number of retries on failure (default 0. s3v4 only)")
 	fl.StringVar(&sizeArg, "z", "1M", "Size of objects in bytes with suffix K, M, and G")
 	fl.StringVar(&multipartSizeArg, "multipart-size", "5M", "Size of the multipart chunks")
+	fl.BoolVar(&detailed, "detailed", false, "print detailed stats")
 
 	switch err := fl.Parse(os.Args[1:]); err {
 	case flag.ErrHelp:
@@ -118,6 +121,10 @@ func main() {
 	fmt.Println("Released under GPL v3 license")
 	fmt.Println()
 
+	if objPrefix == "" {
+		objPrefix = fmt.Sprintf("rsbench-%d", time.Now().Unix())
+	}
+
 	if protocol == "" {
 		fmt.Println("Missing argument -protocol for client protocol.")
 		printHelpAndExit()
@@ -129,12 +136,12 @@ func main() {
 		os.Exit(-1)
 	}
 
-	hostIPForPrinting := ""
 	if hostIP == "" && urlHost == "" {
 		fmt.Println("Missing host information.")
 		printHelpAndExit()
 	}
 
+	hostIPForPrinting := ""
 	if hostIP != "" {
 		dTransport := httpClient.Transport.(*http.Transport)
 
@@ -277,8 +284,8 @@ func main() {
 	// Test access to the bucket
 	err = client.Prepare(bucket)
 	if err != nil {
-		log.Fatalf("error preparing the bucket: %v\n" +
-			"For more information, run again with flag -v.")
+		log.Fatalf("error preparing the bucket: %v\n"+
+			"For more information, run again with flag -v.", bucket)
 	}
 
 	// Initialize data for the bucket
@@ -328,18 +335,18 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 		uploadDurations = append(uploadDurations, v.Duration.Seconds())
 		totalDuration += v.Duration.Seconds()
 	}
-	sort.Float64s(uploadDurations)
 
 	// log.Info(successfulUploadIDs)
 	successfulUploads := len(successfulUploadIDs)
 	failedUploads := len(uploads) - len(successfulUploadIDs)
-	uploadMBps := (float64(uploadedBytes) / uploadTime) / (1000 * 1000)
+	uploadMBps := (float64(uploadedBytes) / uploadTime) / (1000 * 1000) // TODO: make base 2 for uniformity
 	uploadPerSecond := float64(successfulUploads) / uploadTime
 
 	fmt.Printf("%-9s%-6s%-11s%-7s%-12s%-8s%-8s%-12s\n",
 		"Threads", "Size", "Operation", "Time", "Successful", "Failed", "MBps", "OPps")
 	fmt.Printf("%-9d%-6v%-11s%-7.2f%-12v%-8v%-8.2f%-12.2f\n",
 		threads, bytefmt.ByteSize(objectSize), "PUT", uploadTime, successfulUploads, failedUploads, uploadMBps, uploadPerSecond)
+	printHistogram(uploads)
 
 	if len(successfulUploadIDs) < 5 {
 		if verbose == false {
@@ -383,7 +390,6 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 				downloadDurations = append(downloadDurations, d.Duration.Seconds())
 			}
 		}
-		sort.Float64s(downloadDurations)
 
 		if successfulDownloads == 0 {
 			log.Fatal("All downloads failed\n" +
@@ -395,6 +401,7 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 
 		fmt.Printf("%-9d%-6v%-11s%-7.2f%-12v%-8v%-8.2f%-12.2f\n",
 			threads, bytefmt.ByteSize(objectSize), "GET", downloadTime, successfulDownloads, failedDownloads, mbPs, downloadsPerSecond)
+		printHistogram(downloads)
 	}
 
 	if noCleanup {
@@ -410,6 +417,7 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 	fmt.Println("Deleting test objects")
 	deleteChan := make(chan int)
 
+	deleteStart := time.Now()
 	deleteEg, deleteCtx := errgroup.WithContext(context.Background())
 	for n := 0; n < threads; n++ {
 		deleteEg.Go(func() error {
@@ -447,6 +455,51 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 	if err := deleteEg.Wait(); err != nil {
 		log.Fatal("Error while performing delete: ", err)
 	}
+	dDelete := time.Since(deleteStart)
+	fmt.Printf("Deletes completed in %v\n", dDelete)
+}
+
+func printHistogram(res []TransferResult) {
+	histogram := hdrhistogram.New(0, time.Hour.Milliseconds(), 0)
+	for _, re := range res {
+		_ = histogram.RecordValue(re.Duration.Milliseconds())
+	}
+	_ = PrintHistogram(histogram, os.Stdout)
+}
+
+// Adapted from h.PrintHistogram
+func PrintHistogram(h *hdrhistogram.Histogram, w io.Writer) (err error) {
+	valueScale := 1.0
+	outputWriter := tabwriter.NewWriter(w, 4, 2, 2, ' ', 0)
+	dist := h.CumulativeDistributionWithTicks(1)
+	_, err = outputWriter.Write([]byte("Percentile\tLatency(ms)\tCount\tCumulative\n"))
+	if err != nil {
+		return
+	}
+
+	var prevCount int64
+	for _, slice := range dist {
+		percentile := slice.Quantile / 100.0
+		_, err = outputWriter.Write([]byte(fmt.Sprintf("%12f\t%12.0f\t%12d\t%12d\n", percentile, float64(slice.ValueAt)/valueScale, slice.Count-prevCount, slice.Count)))
+		if err != nil {
+			return
+		}
+		prevCount = slice.Count
+	}
+
+	err = outputWriter.Flush()
+	if err != nil {
+		return
+	}
+
+	footer := fmt.Sprintf("#[Mean    = %12.3f, StdDeviation   = %12.3f]\n#[Max     = %12.3f, Total count    = %12d]\n",
+		h.Mean()/valueScale,
+		h.StdDev()/valueScale,
+		float64(h.Max())/valueScale,
+		h.TotalCount(),
+	)
+	_, err = w.Write([]byte(footer))
+	return
 }
 
 func runAndCollectResults(indexes chan<- int, res <-chan TransferResult) []TransferResult {
@@ -455,19 +508,38 @@ func runAndCollectResults(indexes chan<- int, res <-chan TransferResult) []Trans
 		successUploads uint64
 	)
 
+	// start first upload
 	for nextId = 0; nextId < threads+1; nextId++ {
 		indexes <- nextId
 	}
-
 	results := make([]TransferResult, 0, objects)
-	deadline := time.After(time.Second * time.Duration(durationSecs))
+
+	// set timeout
+	timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), time.Second*time.Duration(durationSecs))
+	defer timeoutCancel()
+
+	// start collector
+	timingsChan := make(chan timings, 1000)
+	if detailed {
+		go func() {
+			_ = collectLoop(timeoutCtx, time.Second, timingsChan)
+		}()
+	}
+
+	// create histogram, use millis resolution
 
 Loop:
 	for {
 		select {
-		case <-deadline:
+		case <-timeoutCtx.Done():
 			break Loop
 		case r := <-res:
+			if detailed {
+				timingsChan <- timings{
+					copy:  r.Duration,
+					bytes: int64(objectSize),
+				}
+			}
 			results = append(results, r)
 			if r.Error != nil {
 				indexes <- r.Id
@@ -499,7 +571,7 @@ func runUpload(ctx context.Context, ids <-chan int, res chan<- TransferResult) {
 		startTime := time.Now()
 		r := client.DoUpload(ctx, objectKey(id), reader)
 
-		r.Duration = time.Now().Sub(startTime)
+		r.Duration = time.Since(startTime)
 		r.Id = id
 
 		if r.Error != nil {
@@ -507,6 +579,7 @@ func runUpload(ctx context.Context, ids <-chan int, res chan<- TransferResult) {
 				log.Error(r.Error)
 			}
 		}
+
 		res <- r
 	}
 }
@@ -542,7 +615,7 @@ func runDownload(ctx context.Context, indexes <-chan int, res chan<- TransferRes
 		startTime := time.Now()
 		r := client.DoDownload(ctx, objectKey(idx))
 
-		r.Duration = time.Now().Sub(startTime)
+		r.Duration = time.Since(startTime)
 		r.Id = id
 
 		if r.Error != nil {
