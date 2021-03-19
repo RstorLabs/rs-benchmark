@@ -136,6 +136,8 @@ func (u *S3AwsV4) DoDownload(ctx context.Context, key string) (result TransferRe
 		}
 	}
 
+	result.Size = copied
+
 	return
 }
 

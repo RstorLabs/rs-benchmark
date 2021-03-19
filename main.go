@@ -30,6 +30,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"math/rand"
 	"net"
 	"net/http"
@@ -61,6 +62,8 @@ var (
 	objects                      uint64
 	client                       Uploader
 	detailed                     bool
+	fromFile                     string
+	fromFileScale                float64
 )
 
 const version = "1.1"
@@ -98,6 +101,8 @@ func main() {
 	fl.StringVar(&sizeArg, "z", "1M", "Size of objects in bytes with suffix K, M, and G")
 	fl.StringVar(&multipartSizeArg, "multipart-size", "5M", "Size of the multipart chunks")
 	fl.BoolVar(&detailed, "detailed", false, "print detailed stats")
+	fl.StringVar(&fromFile, "from-file", "", "read operations from a file in op,filename,size format. op is GET or PUT unseen GETs are turned to PUTs")
+	fl.Float64Var(&fromFileScale, "from-file-scale", 1, "when using from-file, multiply sizes by this factor")
 
 	switch err := fl.Parse(os.Args[1:]); err {
 	case flag.ErrHelp:
@@ -294,20 +299,81 @@ func main() {
 
 	// Loop running the tests
 	for loop := 1; loop <= loops; loop++ {
-		runLoop(loop, pauseBetweenPhases)
+		if loop > 1 && pauseBetweenPhases {
+			fmt.Printf("Loop %d done\n", loop-1)
+			pause()
+		}
+
+		fmt.Printf("Starting loop %d...\n", loop)
+
+		if fromFile != "" {
+			runFromFile(fromFile, fromFileScale)
+		} else {
+			runLoop(pauseBetweenPhases)
+		}
 	}
 
 	fmt.Println("\nDone.")
 }
 
-func runLoop(loop int, pauseBetweenPhases bool) {
-	if loop > 1 && pauseBetweenPhases {
-		fmt.Printf("Loop %d done\n", loop-1)
-		pause()
+func runFromFile(file string, scale float64) {
+	ctx := context.Background()
+	seenItems := make(map[string]int64)
+	elChan := make(chan listElement, 10)
+
+	log.Infof("using ops from file %v", file)
+
+	f, err := os.Open(file)
+	if err != nil {
+		log.Fatalf("cannot open list file: %v", err)
 	}
 
-	fmt.Printf("Starting loop %d...\n", loop)
+	eg, egCtx := errgroup.WithContext(ctx)
+	eg.Go(func() error {
+		return readOpsCsv(egCtx, f, elChan)
+	})
+	eg.Go(func() error {
+		r := rand.New(rand.NewSource(0))
+		for {
+			select {
+			case <-egCtx.Done():
+				return nil
+			case el, ok := <-elChan:
+				if !ok {
+					return nil
+				}
 
+				log.Infof("processing %v", el)
+
+				_, seen := seenItems[el.key]
+				size := int64(float64(el.size) * scale)
+
+				var res TransferResult
+
+				if el.put || !seen {
+					lr := io.LimitReader(r, size)
+					buf, _ := ioutil.ReadAll(lr)
+					res = client.DoUpload(ctx, el.key, bytes.NewReader(buf))
+				} else {
+					res = client.DoDownload(egCtx, el.key)
+				}
+
+				if res.Error != nil {
+					log.Errorf("error: %v", res.Error)
+				}
+				seenItems[el.key] = size
+			}
+		}
+	})
+
+	err = eg.Wait()
+	if err != nil {
+		log.Error("error: %v", err)
+	}
+	log.Infof("done")
+}
+
+func runLoop(pauseBetweenPhases bool) {
 	// Run the upload case
 	successfulUploadIDs = make([]int, 0, 1000) // reused in download step
 	totalDuration := float64(0)
@@ -562,6 +628,7 @@ type TransferResult struct {
 	Id       int
 	Duration time.Duration
 	Error    error
+	Size     int64
 }
 
 func runUpload(ctx context.Context, ids <-chan int, res chan<- TransferResult) {
