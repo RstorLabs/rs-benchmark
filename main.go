@@ -126,6 +126,11 @@ func main() {
 		printHelpAndExit()
 		os.Exit(-1)
 	}
+	if maxRetries < 0 {
+		fmt.Println("Max retries should be a positive value")
+		printHelpAndExit()
+		os.Exit(-1)
+	}
 
 	hostIPForPrinting := ""
 	if hostIP == "" && urlHost == "" {
@@ -255,7 +260,7 @@ func main() {
 	tabLine("Loops", loops)
 	if useMultipart {
 		tabLine("Multipart",
-			fmt.Sprintf(", %s per part, %d parallel uploads", multipartSizeArg, multipartConcurrency))
+			fmt.Sprintf(" %s per part, %d parallel uploads", multipartSizeArg, multipartConcurrency))
 	} else {
 		tabLine("Multipart", "false")
 	}
