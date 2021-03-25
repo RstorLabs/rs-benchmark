@@ -58,7 +58,6 @@ var (
 	noCleanup                    bool
 	noGet                        bool
 	objects                      uint64
-	client                       Uploader
 )
 
 const version = "1.1"
@@ -69,6 +68,8 @@ func main() {
 	var useMultipart, showVersion bool
 	var pauseBetweenPhases bool
 	var hostIP string
+	var useHTTP2 string
+	var err error
 
 	// Parse command line
 	fl := flag.NewFlagSet("rs-benchmark", flag.ExitOnError)
@@ -90,11 +91,12 @@ func main() {
 	fl.BoolVar(&noCleanup, "no-cleanup", false, "do not cleanup inserted data")
 	fl.BoolVar(&noGet, "no-get", false, "do not perform GET part of test")
 	fl.StringVar(&hostIP, "ip", "", "forces all hostnames to resolve to this address (s3v2, s3v4 only)")
-	fl.StringVar(&objPrefix, "prefix", "Object", "will create objects with key: 'prefix/number'")
+	fl.StringVar(&objPrefix, "prefix", "", "will create objects with key: 'prefix/number', defaults to rsbench-$unixtimestamp")
 	fl.BoolVar(&distributeKeys, "distribute-keys", true, "distribute keys over two levels of directories (65536 prefixes)")
 	fl.IntVar(&maxRetries, "max-retries", 0, "number of retries on failure (default 0. s3v4 only)")
 	fl.StringVar(&sizeArg, "z", "1M", "Size of objects in bytes with suffix K, M, and G")
 	fl.StringVar(&multipartSizeArg, "multipart-size", "5M", "Size of the multipart chunks")
+	fl.StringVar(&useHTTP2, "http2", "off", "disable or force HTTP2: auto, on, off")
 
 	switch err := fl.Parse(os.Args[1:]); err {
 	case flag.ErrHelp:
@@ -114,9 +116,13 @@ func main() {
 	}
 
 	fmt.Printf("rs-benchmark v%s - a compact tool for benchmarking different object storages\n", version)
-	fmt.Println("Copyright (C) 2016-2020 RStor Inc (open-source@rstor.io)")
+	fmt.Println("Copyright (C) 2016-2021 RStor Inc (open-source@rstor.io)")
 	fmt.Println("Released under GPL v3 license")
 	fmt.Println()
+
+	if objPrefix == "" {
+		objPrefix = fmt.Sprintf("rsbench-%d", time.Now().Unix())
+	}
 
 	if protocol == "" {
 		fmt.Println("Missing argument -protocol for client protocol.")
@@ -135,34 +141,18 @@ func main() {
 		printHelpAndExit()
 	}
 
+	http2s := mustParseHttp2Setting(useHTTP2)
+
+	httpClient, err := makeHttpClient(http2s, hostIP)
+	if err != nil {
+		fmt.Printf("error instantiating http client: %v\n", err)
+		os.Exit(-1)
+	}
+
 	if hostIP != "" {
-		dTransport := httpClient.Transport.(*http.Transport)
-
-		dTransport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			addr = hostIP
-			return dialer.DialContext(ctx, network, addr)
-		}
-
 		hostIPForPrinting = hostIP
 	} else {
-		u, err := url.Parse(urlHost)
-		if err != nil {
-			fmt.Println("Invalid url ", err)
-			printHelpAndExit()
-		}
-
-		host := strings.Split(u.Host, ":")[0]
-		ips, err := net.LookupIP(host)
-		if err != nil {
-			fmt.Println("Can't resolve host ", u.Host)
-			printHelpAndExit()
-		} else {
-			var ipStrings []string
-			for _, ip := range ips {
-				ipStrings = append(ipStrings, ip.String())
-			}
-			hostIPForPrinting = strings.Join(ipStrings, ", ")
-		}
+		hostIPForPrinting = lookupIPForPrinting(urlHost)
 	}
 
 	if protocol != "gcp" {
@@ -180,8 +170,6 @@ func main() {
 		fmt.Println("Missing argument -b for bucket.")
 		printHelpAndExit()
 	}
-
-	var err error
 
 	if objectSize, err = bytefmt.ToBytes(sizeArg); err != nil {
 		fmt.Printf("Invalid -z argument for object size: %v\n", err)
@@ -201,62 +189,80 @@ func main() {
 		maxRetries = 0
 	}
 
+	var makeClient = func() Uploader {
+		return nil
+	}
+
+	params := ClientParams{
+		AccessKey:            accessKey,
+		SecretKey:            secretKey,
+		Url:                  urlHost,
+		Region:               region,
+		UseMultipart:         useMultipart,
+		MultipartConcurrency: multipartConcurrency,
+		HttpClient:           httpClient,
+		Bucket:               bucket,
+	}
+
 	switch protocol {
 	case "s3v4":
-		v4Client := NewS3AwsV4(accessKey, secretKey, urlHost, region)
-		v4Client.UseMultipart = useMultipart
-		client = v4Client
+		makeClient = func() Uploader {
+			return NewS3AwsV4(params)
+		}
 	case "s3v2":
-		if useMultipart {
+		if params.UseMultipart {
 			fmt.Println("Multipart not supported")
 			printHelpAndExit()
 		}
-		if region != "" {
+		if params.Region != "" {
 			fmt.Println("-region not supported for s3v2. Drop option.")
 			printHelpAndExit()
 		}
-		client = NewS3AwsV2(accessKey, secretKey, urlHost)
+		makeClient = func() Uploader {
+			return NewS3AwsV2(params)
+		}
 	case "azure":
-		if region != "" {
+		if params.Region != "" {
 			fmt.Println("region param not supported")
 			printHelpAndExit()
 		}
-		if useMultipart && multipartConcurrency > 1 {
+		if params.UseMultipart && params.MultipartConcurrency > 1 {
 			fmt.Println("Multipart concurrency is fixed to one")
-			multipartConcurrency = 1
+			params.MultipartConcurrency = 1
 		}
-		aup := NewAzureUploader(accessKey, secretKey, urlHost)
-		aup.UseMultipart = useMultipart
-		client = aup
+		makeClient = func() Uploader {
+			return NewAzureUploader(params)
+		}
 	case "gcp":
-		if region != "" {
+		if params.Region != "" {
 			fmt.Println("region param not supported")
 			printHelpAndExit()
 		}
 		if useMultipart && multipartConcurrency > 1 {
 			fmt.Println("Multipart concurrency is fixed to one")
-			multipartConcurrency = 1
+			params.MultipartConcurrency = 1
 		}
-		gup := NewGCP()
-		gup.UseMultipart = useMultipart
-		client = gup
+		makeClient = func() Uploader {
+			return NewGCP(params)
+		}
 	default:
 		fmt.Println("unknown client type. Available: s3v4, s3v2, azure, gpc")
 		printHelpAndExit()
 	}
+
 	fmt.Println("Benchmark parameters:")
 
 	tw := tabwriter.NewWriter(os.Stdout, 16, 2, 1, ' ', 0)
 	tabLine := func(name string, value interface{}) {
 		_, _ = fmt.Fprint(tw, name, "\t", value, "\n")
 	}
-	tabLine("Endpoint URL", urlHost)
+	tabLine("Endpoint URL", params.Url)
 	tabLine("Protocol", protocol)
 	tabLine("Host ip", hostIPForPrinting)
 	if region != "" {
-		tabLine("Region", region)
+		tabLine("Region", params.Region)
 	}
-	tabLine("Bucket", bucket)
+	tabLine("Bucket", params.Bucket)
 	tabLine("Prefix", objPrefix)
 	tabLine("Distribute keys", distributeKeys)
 	tabLine("Test time", durationSecs)
@@ -264,9 +270,10 @@ func main() {
 	tabLine("Threads", threads)
 	tabLine("Size", sizeArg)
 	tabLine("Loops", loops)
+	tabLine("HTTP2", useHTTP2)
 	if useMultipart {
 		tabLine("Multipart",
-			fmt.Sprintf("%s per part, %d parallel uploads", multipartSizeArg, multipartConcurrency))
+			fmt.Sprintf("%s per part, %d parallel uploads", multipartSizeArg, params.MultipartConcurrency))
 	} else {
 		tabLine("Multipart", "false")
 	}
@@ -275,10 +282,10 @@ func main() {
 	fmt.Println()
 
 	// Test access to the bucket
-	err = client.Prepare(bucket)
+	err = makeClient().Prepare(bucket)
 	if err != nil {
-		log.Fatalf("error preparing the bucket: %v\n" +
-			"For more information, run again with flag -v.")
+		log.Fatalf("error preparing the bucket: %v\n"+
+			"For more information, run again with flag -v.", bucket)
 	}
 
 	// Initialize data for the bucket
@@ -287,13 +294,24 @@ func main() {
 
 	// Loop running the tests
 	for loop := 1; loop <= loops; loop++ {
-		runLoop(loop, pauseBetweenPhases)
+		runLoop(loop, pauseBetweenPhases, makeClient)
 	}
 
 	fmt.Println("\nDone.")
 }
 
-func runLoop(loop int, pauseBetweenPhases bool) {
+type ClientParams struct {
+	AccessKey            string
+	SecretKey            string
+	Url                  string
+	Region               string
+	UseMultipart         bool
+	MultipartConcurrency int
+	HttpClient           *http.Client
+	Bucket               string
+}
+
+func runLoop(loop int, pauseBetweenPhases bool, makeClient func() Uploader) {
 	if loop > 1 && pauseBetweenPhases {
 		fmt.Printf("Loop %d done\n", loop-1)
 		pause()
@@ -309,7 +327,8 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 
 	ctx, cancelRemainingUploads := context.WithCancel(context.Background())
 	for n := 0; n <= threads; n++ {
-		go runUpload(ctx, indexes, res)
+		client := makeClient()
+		go runUpload(ctx, client, indexes, res)
 	}
 
 	startTime := time.Now()
@@ -360,7 +379,8 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 
 		ctx, cancelRemainingDownloads := context.WithCancel(context.Background())
 		for n := 0; n <= threads; n++ {
-			go runDownload(ctx, indexes, res)
+			client := makeClient()
+			go runDownload(ctx, client, indexes, res)
 		}
 
 		startTime = time.Now()
@@ -413,6 +433,7 @@ func runLoop(loop int, pauseBetweenPhases bool) {
 	deleteEg, deleteCtx := errgroup.WithContext(context.Background())
 	for n := 0; n < threads; n++ {
 		deleteEg.Go(func() error {
+			client := makeClient()
 			for {
 				select {
 				case idx, ok := <-deleteChan:
@@ -492,7 +513,7 @@ type TransferResult struct {
 	Error    error
 }
 
-func runUpload(ctx context.Context, ids <-chan int, res chan<- TransferResult) {
+func runUpload(ctx context.Context, client Uploader, ids <-chan int, res chan<- TransferResult) {
 	for id := range ids {
 		reader := bytes.NewReader(objectData)
 
@@ -535,7 +556,7 @@ func objectKey(idx int) string {
 	return b.String()
 }
 
-func runDownload(ctx context.Context, indexes <-chan int, res chan<- TransferResult) {
+func runDownload(ctx context.Context, client Uploader, indexes <-chan int, res chan<- TransferResult) {
 	for id := range indexes {
 		idx := successfulUploadIDs[id%len(successfulUploadIDs)]
 
@@ -562,4 +583,43 @@ func pause() {
 func printHelpAndExit() {
 	fmt.Print("Abort.\n\nRun \"./rs-benchmark --help\" for usage.\n")
 	os.Exit(-1)
+}
+
+func mustParseHttp2Setting(s string) http2Setting {
+	switch s {
+	case "auto", "":
+		return http2_auto
+	case "no", "off", "0":
+		return http2_off
+	case "force", "yes", "on", "1":
+		return http2_force
+	default:
+		fmt.Println("invalid value for -http2, expected auto, yes or no")
+		os.Exit(-1)
+	}
+	return 0
+}
+
+func lookupIPForPrinting(urlHost string) string {
+	u, err := url.Parse(urlHost)
+	if err != nil {
+		fmt.Println("Invalid url ", err)
+		printHelpAndExit()
+	}
+
+	host := strings.Split(u.Host, ":")[0]
+
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		fmt.Println("Can't resolve host ", u.Host)
+		printHelpAndExit()
+	} else {
+		var ipStrings []string
+		for _, ip := range ips {
+			ipStrings = append(ipStrings, ip.String())
+		}
+		return strings.Join(ipStrings, ", ")
+	}
+
+	return ""
 }

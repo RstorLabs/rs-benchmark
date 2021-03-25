@@ -41,8 +41,8 @@ type AzureUploader struct {
 	UseMultipart bool
 }
 
-func NewAzureUploader(accessKey, secretKey, urlHost string) *AzureUploader {
-	credential, err := azblob.NewSharedKeyCredential(accessKey, secretKey)
+func NewAzureUploader(params ClientParams) *AzureUploader {
+	credential, err := azblob.NewSharedKeyCredential(params.AccessKey, params.SecretKey)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -51,24 +51,22 @@ func NewAzureUploader(accessKey, secretKey, urlHost string) *AzureUploader {
 	pipelineOpts := azblob.PipelineOptions{Retry: azblob.RetryOptions{TryTimeout: time.Hour * 6}}
 	p := azblob.NewPipeline(credential, pipelineOpts)
 
-	u, err := url.Parse(urlHost) // https://$ACCOUNT_NAME.blob.core.windows.net
+	u, err := url.Parse(params.Url) // https://$ACCOUNT_NAME.blob.core.windows.net
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	serviceURL := azblob.NewServiceURL(*u, p)
 
 	return &AzureUploader{
-		ServiceUrl: serviceURL,
+		ServiceUrl:   serviceURL,
+		UseMultipart: params.UseMultipart,
+		ContainerUrl: serviceURL.NewContainerURL(params.Bucket),
 	}
 }
 
 func (u *AzureUploader) Prepare(bucket string) error {
 	ctx := context.Background()
 
-	u.ContainerUrl = u.ServiceUrl.NewContainerURL(bucket)
-
-	// TODO: test if connection works
 	// Create the container on the service (with no metadata and no public access)
 
 	_, err := u.ContainerUrl.Create(ctx, azblob.Metadata{}, azblob.PublicAccessNone)

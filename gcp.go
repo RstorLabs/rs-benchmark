@@ -42,7 +42,7 @@ type GCP struct {
 	MPDownloader *s3manager.Downloader
 }
 
-func NewGCP() *GCP {
+func NewGCP(params ClientParams) *GCP {
 	ctx := context.TODO()
 	client, err := gstorage.NewClient(ctx)
 	if err != nil {
@@ -51,11 +51,11 @@ func NewGCP() *GCP {
 
 	return &GCP{
 		Client: client,
+		Bucket: client.Bucket(params.Bucket),
 	}
 }
 
 func (u *GCP) Prepare(bucketName string) error {
-	u.Bucket = u.Client.Bucket(bucketName)
 	return nil
 }
 
