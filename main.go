@@ -43,6 +43,7 @@ import (
 	"github.com/HdrHistogram/hdrhistogram-go"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 var (
@@ -61,6 +62,7 @@ var (
 	objects                      uint64
 	client                       Uploader
 	detailed                     bool
+	rateLimit                    float64
 )
 
 const version = "1.1"
@@ -98,6 +100,7 @@ func main() {
 	fl.StringVar(&sizeArg, "z", "1M", "Size of objects in bytes with suffix K, M, and G")
 	fl.StringVar(&multipartSizeArg, "multipart-size", "5M", "Size of the multipart chunks")
 	fl.BoolVar(&detailed, "detailed", false, "print detailed stats")
+	fl.Float64Var(&rateLimit, "rate-limit", 0, "requests per second limit")
 
 	switch err := fl.Parse(os.Args[1:]); err {
 	case flag.ErrHelp:
@@ -117,7 +120,7 @@ func main() {
 	}
 
 	fmt.Printf("rs-benchmark v%s - a compact tool for benchmarking different object storages\n", version)
-	fmt.Println("Copyright (C) 2016-2020 RStor Inc (open-source@rstor.io)")
+	fmt.Println("Copyright (C) 2016-2021 RStor Inc (open-source@rstor.io)")
 	fmt.Println("Released under GPL v3 license")
 	fmt.Println()
 
@@ -609,8 +612,17 @@ func objectKey(idx int) string {
 }
 
 func runDownload(ctx context.Context, indexes <-chan int, res chan<- TransferResult) {
+	var limiter *rate.Limiter
+	if rateLimit > 0 {
+		limiter = rate.NewLimiter(rate.Limit(rateLimit), 1)
+	}
+
 	for id := range indexes {
 		idx := successfulUploadIDs[id%len(successfulUploadIDs)]
+
+		if limiter != nil {
+			limiter.Wait(ctx)
+		}
 
 		startTime := time.Now()
 		r := client.DoDownload(ctx, objectKey(idx))
