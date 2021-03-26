@@ -136,18 +136,12 @@ func main() {
 	}
 
 	hostIPForPrinting := ""
-	if hostIP == "" && urlHost == "" {
+	if urlHost == "" {
 		fmt.Println("Missing host information.")
 		printHelpAndExit()
 	}
 
 	http2s := mustParseHttp2Setting(useHTTP2)
-
-	httpClient, err := makeHttpClient(http2s, hostIP)
-	if err != nil {
-		fmt.Printf("error instantiating http client: %v\n", err)
-		os.Exit(-1)
-	}
 
 	if hostIP != "" {
 		hostIPForPrinting = hostIP
@@ -189,65 +183,53 @@ func main() {
 		maxRetries = 0
 	}
 
-	var makeClient = func() Uploader {
-		return nil
-	}
-
-	params := ClientParams{
-		AccessKey:            accessKey,
-		SecretKey:            secretKey,
-		Url:                  urlHost,
-		Region:               region,
-		UseMultipart:         useMultipart,
-		MultipartConcurrency: multipartConcurrency,
-		HttpClient:           httpClient,
-		Bucket:               bucket,
-	}
-
-	switch protocol {
-	case "s3v4":
-		makeClient = func() Uploader {
-			return NewS3AwsV4(params)
-		}
-	case "s3v2":
-		if params.UseMultipart {
-			fmt.Println("Multipart not supported")
-			printHelpAndExit()
-		}
-		if params.Region != "" {
-			fmt.Println("-region not supported for s3v2. Drop option.")
-			printHelpAndExit()
-		}
-		makeClient = func() Uploader {
-			return NewS3AwsV2(params)
-		}
-	case "azure":
-		if params.Region != "" {
-			fmt.Println("region param not supported")
-			printHelpAndExit()
-		}
-		if params.UseMultipart && params.MultipartConcurrency > 1 {
-			fmt.Println("Multipart concurrency is fixed to one")
-			params.MultipartConcurrency = 1
-		}
-		makeClient = func() Uploader {
-			return NewAzureUploader(params)
-		}
-	case "gcp":
-		if params.Region != "" {
-			fmt.Println("region param not supported")
-			printHelpAndExit()
-		}
-		if useMultipart && multipartConcurrency > 1 {
-			fmt.Println("Multipart concurrency is fixed to one")
-			params.MultipartConcurrency = 1
-		}
-		makeClient = func() Uploader {
-			return NewGCP(params)
-		}
-	default:
-		fmt.Println("unknown client type. Available: s3v4, s3v2, azure, gpc")
+	if useMultipart && protocol == "s3v2" {
+		fmt.Println("Multipart not supported for s3v2")
 		printHelpAndExit()
+	}
+
+	if useMultipart && multipartConcurrency > 1 && protocol == "azure" || protocol == "gcp" {
+		fmt.Println("Multipart concurrency parameter not supported by the chosen protocol")
+		multipartConcurrency = 1
+	}
+
+	if region != "" && protocol != "s3v4" {
+		fmt.Println("Region parameter is not supported by the chosen protocol, will be ignored")
+	}
+
+	var makeClient = func() Uploader {
+		httpClient, err := makeHttpClient(http2s, hostIP)
+		if err != nil {
+			fmt.Printf("error instantiating http client: %v\n", err)
+			os.Exit(-1)
+		}
+
+		params := ClientParams{
+			AccessKey:            accessKey,
+			SecretKey:            secretKey,
+			Url:                  urlHost,
+			Region:               region,
+			UseMultipart:         useMultipart,
+			MultipartConcurrency: multipartConcurrency,
+			HttpClient:           httpClient,
+			Bucket:               bucket,
+		}
+
+		switch protocol {
+		case "s3v4":
+			return NewS3AwsV4(params)
+		case "s3v2":
+			return NewS3AwsV2(params)
+		case "azure":
+			return NewAzureUploader(params)
+		case "gcp":
+			return NewGCP(params)
+		default:
+			fmt.Println("unknown client type. Available: s3v4, s3v2, azure, gpc")
+			printHelpAndExit()
+		}
+
+		return nil
 	}
 
 	fmt.Println("Benchmark parameters:")
@@ -256,13 +238,13 @@ func main() {
 	tabLine := func(name string, value interface{}) {
 		_, _ = fmt.Fprint(tw, name, "\t", value, "\n")
 	}
-	tabLine("Endpoint URL", params.Url)
+	tabLine("Endpoint URL", urlHost)
 	tabLine("Protocol", protocol)
 	tabLine("Host ip", hostIPForPrinting)
 	if region != "" {
-		tabLine("Region", params.Region)
+		tabLine("Region", region)
 	}
-	tabLine("Bucket", params.Bucket)
+	tabLine("Bucket", bucket)
 	tabLine("Prefix", objPrefix)
 	tabLine("Distribute keys", distributeKeys)
 	tabLine("Test time", durationSecs)
@@ -273,7 +255,7 @@ func main() {
 	tabLine("HTTP2", useHTTP2)
 	if useMultipart {
 		tabLine("Multipart",
-			fmt.Sprintf("%s per part, %d parallel uploads", multipartSizeArg, params.MultipartConcurrency))
+			fmt.Sprintf("%s per part, %d parallel uploads", multipartSizeArg, multipartConcurrency))
 	} else {
 		tabLine("Multipart", "false")
 	}
