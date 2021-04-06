@@ -21,40 +21,66 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"net"
 	"net/http"
 	"time"
 )
 
-var httpClient = &http.Client{
-	Transport: HTTPTransport,
-	Timeout:   time.Minute * 5,
-}
+type http2Setting int
 
-var dialer = &net.Dialer{
-	Timeout:   30 * time.Second,
-	KeepAlive: 30 * time.Second,
-}
+const (
+	http2_auto  http2Setting = 0
+	http2_off   http2Setting = 1
+	http2_force http2Setting = 2
+)
 
-// Our HTTP transport used for the roundtripper below
-var HTTPTransport http.RoundTripper = &http.Transport{
-	Proxy: http.ProxyFromEnvironment,
+func makeHttpClient(h2s http2Setting, forceAddress string) (*http.Client, error) {
+	var dialer = &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
 
-	DialContext: dialer.DialContext,
+	dialContext := dialer.DialContext
 
-	TLSHandshakeTimeout:   10 * time.Second,
-	ExpectContinueTimeout: 0,
+	if forceAddress != "" {
+		dialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, network, forceAddress)
+		}
+	}
 
-	ResponseHeaderTimeout: 10 * time.Second,
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
 
-	// Allow an unlimited number of idle connections
-	MaxIdleConnsPerHost: 4096,
-	MaxIdleConns:        0,
+		DialContext: dialContext,
 
-	// But limit their idle time
-	IdleConnTimeout: time.Minute,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 0,
 
-	// Ignore TLS errors
-	TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		ResponseHeaderTimeout: 10 * time.Second,
+
+		// Allow an unlimited number of idle connections
+		MaxIdleConnsPerHost: 4096,
+		MaxIdleConns:        0,
+
+		// But limit their idle time
+		IdleConnTimeout: time.Minute,
+		MaxConnsPerHost: 0,
+
+		ForceAttemptHTTP2: h2s != http2_off,
+
+		// Ignore TLS errors
+		TLSClientConfig:    &tls.Config{InsecureSkipVerify: true},
+		DisableCompression: true,
+	}
+
+	if h2s == http2_force {
+		transport.TLSClientConfig.NextProtos = []string{"h2"}
+	}
+
+	return &http.Client{
+		Transport: transport,
+		Timeout:   time.Minute * 5,
+	}, nil
 }

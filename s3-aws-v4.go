@@ -44,19 +44,19 @@ type S3AwsV4 struct {
 	MPDownloader *s3manager.Downloader
 }
 
-func NewS3AwsV4(accessKey, secretKey, urlHost, region string) *S3AwsV4 {
+func NewS3AwsV4(params ClientParams) *S3AwsV4 {
 	awsConfig := &aws.Config{
 		Credentials: credentials.NewStaticCredentials(
-			accessKey,
-			secretKey,
+			params.AccessKey,
+			params.SecretKey,
 			""),
-		Endpoint:                aws.String(urlHost),
-		Region:                  aws.String(region),
+		Endpoint:                aws.String(params.Url),
+		Region:                  aws.String(params.Region),
 		DisableSSL:              aws.Bool(true),
 		DisableComputeChecksums: aws.Bool(true),
 		S3ForcePathStyle:        aws.Bool(true),
 		MaxRetries:              aws.Int(maxRetries),
-		HTTPClient:              httpClient,
+		HTTPClient:              params.HttpClient,
 	}
 
 	sess, err := session.NewSession(awsConfig)
@@ -71,13 +71,14 @@ func NewS3AwsV4(accessKey, secretKey, urlHost, region string) *S3AwsV4 {
 
 	downloader := s3manager.NewDownloader(sess, func(d *s3manager.Downloader) {
 		d.PartSize = int64(partSize)
-		d.Concurrency = multipartConcurrency
+		d.Concurrency = params.MultipartConcurrency
 	})
 
 	return &S3AwsV4{
 		S3:           s3.New(sess),
 		MPUploader:   uploader,
 		MPDownloader: downloader,
+		Bucket:       params.Bucket,
 	}
 }
 

@@ -36,17 +36,20 @@ import (
 )
 
 type S3AwsV2 struct {
-	AccessKey string
-	SecretKey string
-	Bucket    string
-	Host      string
+	AccessKey  string
+	SecretKey  string
+	Bucket     string
+	Host       string
+	HttpClient *http.Client
 }
 
-func NewS3AwsV2(accessKey, secretKey, urlHost string) *S3AwsV2 {
+func NewS3AwsV2(params ClientParams) *S3AwsV2 {
 	return &S3AwsV2{
-		AccessKey: accessKey,
-		SecretKey: secretKey,
-		Host:      urlHost,
+		AccessKey:  params.AccessKey,
+		SecretKey:  params.SecretKey,
+		Host:       params.Url,
+		HttpClient: params.HttpClient,
+		Bucket:     params.Bucket,
 	}
 }
 
@@ -63,7 +66,7 @@ func (u *S3AwsV2) DoDelete(ctx context.Context, key string) error {
 
 	setSignature(req, u.AccessKey, u.SecretKey)
 
-	resp, err := httpClient.Do(req)
+	resp, err := u.HttpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -85,7 +88,7 @@ func (u *S3AwsV2) DoDownload(ctx context.Context, key string) (result TransferRe
 	req = req.WithContext(ctx)
 	setSignature(req, u.AccessKey, u.SecretKey)
 
-	resp, err := httpClient.Do(req)
+	resp, err := u.HttpClient.Do(req)
 	if err != nil {
 		result.Error = fmt.Errorf("error downloading object %s: %v", path, err)
 		return
@@ -138,7 +141,7 @@ func (u *S3AwsV2) DoUpload(ctx context.Context, key string, data io.ReadSeeker) 
 	// req.Header.Set("Content-MD5", object_data_md5)
 	setSignature(req, u.AccessKey, u.SecretKey)
 
-	resp, err := httpClient.Do(req)
+	resp, err := u.HttpClient.Do(req)
 	if err != nil {
 		result.Error = fmt.Errorf("error uploading object %s: %v", path, err)
 		return result
