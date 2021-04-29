@@ -1,0 +1,25 @@
+version: 2
+updates:
+- package-ecosystem: gomod
+  directory: "/"
+  schedule:
+    interval: monthly
+    time: "07:00"
+    timezone: Europe/Rome
+  open-pull-requests-limit: 10
+  target-branch: master
+  ignore:
+  - dependency-name: github.com/aws/aws-sdk-go
+    versions:
+    - 1.36.19
+    - 1.37.1
+  - dependency-name: cloud.google.com/go
+    versions:
+    - 0.74.0
+    - 0.75.0
+  - dependency-name: github.com/Azure/azure-storage-blob-go
+    versions:
+    - 0.12.0
+  - dependency-name: github.com/sirupsen/logrus
+    versions:
+    - 1.7.0
