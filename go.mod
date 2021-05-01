@@ -30,11 +30,10 @@ require (
 	github.com/onsi/ginkgo v1.8.0 // indirect
 	github.com/onsi/gomega v1.5.0 // indirect
 	github.com/pkg/errors v0.9.1
-	github.com/sirupsen/logrus v1.4.1
+	github.com/sirupsen/logrus v1.8.1
 	go.opencensus.io v0.20.2 // indirect
 	golang.org/x/oauth2 v0.0.0-20190402181905-9f3314589c9a // indirect
 	golang.org/x/sync v0.0.0-20201008141435-b3e1573b7520
-	golang.org/x/sys v0.0.0-20190419153524-e8e3143a4f4a // indirect
 	google.golang.org/api v0.3.2 // indirect
 	google.golang.org/appengine v1.5.0 // indirect
 	google.golang.org/genproto v0.0.0-20190418145605-e7d98fc518a7 // indirect
