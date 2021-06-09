@@ -308,6 +308,12 @@ func runLoop(loop int, pauseBetweenPhases bool, makeClient func() Uploader) {
 
 	fmt.Printf("Starting loop %d...\n", loop)
 
+	limit := rate.Inf
+	if rateLimit > 0 {
+		limit = rate.Limit(rateLimit)
+	}
+	limiter := rate.NewLimiter(limit, 1) // burst of 1 is ok since we always wait()
+
 	// Run the upload case
 	successfulUploadIDs = make([]int, 0, 1000) // reused in download step
 	totalDuration := float64(0)
@@ -317,7 +323,7 @@ func runLoop(loop int, pauseBetweenPhases bool, makeClient func() Uploader) {
 	ctx, cancelRemainingUploads := context.WithCancel(context.Background())
 	for n := 0; n <= threads; n++ {
 		client := makeClient()
-		go runUpload(ctx, client, indexes, res)
+		go runUpload(ctx, client, limiter, indexes, res)
 	}
 
 	startTime := time.Now()
@@ -369,7 +375,7 @@ func runLoop(loop int, pauseBetweenPhases bool, makeClient func() Uploader) {
 		ctx, cancelRemainingDownloads := context.WithCancel(context.Background())
 		for n := 0; n <= threads; n++ {
 			client := makeClient()
-			go runDownload(ctx, client, indexes, res)
+			go runDownload(ctx, client, limiter, indexes, res)
 		}
 
 		startTime = time.Now()
@@ -567,8 +573,10 @@ type TransferResult struct {
 	Error    error
 }
 
-func runUpload(ctx context.Context, client Uploader, ids <-chan int, res chan<- TransferResult) {
+func runUpload(ctx context.Context, client Uploader, limiter *rate.Limiter, ids <-chan int, res chan<- TransferResult) {
 	for id := range ids {
+		_ = limiter.Wait(ctx)
+
 		reader := bytes.NewReader(objectData)
 
 		startTime := time.Now()
@@ -611,18 +619,10 @@ func objectKey(idx int) string {
 	return b.String()
 }
 
-func runDownload(ctx context.Context, client Uploader, indexes <-chan int, res chan<- TransferResult) {
-	var limiter *rate.Limiter
-	if rateLimit > 0 {
-		limiter = rate.NewLimiter(rate.Limit(rateLimit), 1)
-	}
-
+func runDownload(ctx context.Context, client Uploader, limiter *rate.Limiter, indexes <-chan int, res chan<- TransferResult) {
 	for id := range indexes {
 		idx := successfulUploadIDs[id%len(successfulUploadIDs)]
-
-		if limiter != nil {
-			limiter.Wait(ctx)
-		}
+		_ = limiter.Wait(ctx)
 
 		startTime := time.Now()
 		r := client.DoDownload(ctx, objectKey(idx))
