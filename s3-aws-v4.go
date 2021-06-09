@@ -25,8 +25,11 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -94,10 +97,23 @@ func (u *S3AwsV4) Prepare(bucket string) error {
 }
 
 func (u *S3AwsV4) DoDelete(ctx context.Context, key string) error {
-	_, err := u.S3.DeleteObjectWithContext(ctx, &s3.DeleteObjectInput{
-		Bucket: &u.Bucket,
-		Key:    &key,
-	})
+	var err error
+
+	for tries := 0; tries < 10; tries++ {
+		_, err = u.S3.DeleteObjectWithContext(ctx, &s3.DeleteObjectInput{
+			Bucket: &u.Bucket,
+			Key:    &key,
+		})
+		if err == nil {
+			return nil
+		}
+		if aerr, ok := err.(awserr.Error); !ok || aerr.Code() != "SlowDown" {
+			return err
+		}
+		randSleep := time.Duration(1000+rand.Intn(4000)) * time.Millisecond
+		time.Sleep(randSleep)
+	}
+
 	return err
 }
 

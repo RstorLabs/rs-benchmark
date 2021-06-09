@@ -430,20 +430,7 @@ func runLoop(loop int, pauseBetweenPhases bool, makeClient func() Uploader) {
 	for n := 0; n < threads; n++ {
 		deleteEg.Go(func() error {
 			client := makeClient()
-			for {
-				select {
-				case idx, ok := <-deleteChan:
-					if !ok {
-						return nil
-					}
-					err := client.DoDelete(deleteCtx, objectKey(idx))
-					if err != nil {
-						return err
-					}
-				case <-deleteCtx.Done():
-					return deleteCtx.Err()
-				}
-			}
+			return runDelete(deleteCtx, client, limiter, deleteChan)
 		})
 	}
 	deleteEg.Go(func() error {
@@ -466,6 +453,26 @@ func runLoop(loop int, pauseBetweenPhases bool, makeClient func() Uploader) {
 	}
 	dDelete := time.Since(deleteStart)
 	fmt.Printf("Deletes completed in %v\n", dDelete)
+}
+
+func runDelete(deleteCtx context.Context, client Uploader, limiter *rate.Limiter, deleteChan chan int) error {
+	for {
+		select {
+		case idx, ok := <-deleteChan:
+			if !ok {
+				return nil
+			}
+
+			_ = limiter.Wait(deleteCtx)
+
+			err := client.DoDelete(deleteCtx, objectKey(idx))
+			if err != nil {
+				return err
+			}
+		case <-deleteCtx.Done():
+			return deleteCtx.Err()
+		}
+	}
 }
 
 func printHistogram(res []TransferResult) {
